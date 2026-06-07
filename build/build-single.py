@@ -18,7 +18,7 @@ ASSETS = [
     "tinman_head_0.webp", "tinman_head_1.webp", "tinman_head_2.webp",
     "tinman_head_3.webp", "tinman_head_4.webp", "tinman_head_5.webp",
     "nut_red.webp", "nut_blue.webp", "nut_gold.webp", "hand.webp",
-    "woz-logo.webp", "play-now.webp", "tinman-hero.webp",
+    "woz-logo.webp", "play-now.webp", "tap-to-start.webp", "tinman-hero.webp",
     # Match-3 sounds (from the original WoZ Magic Match)
     "audio/m3_bgm.mp3", "audio/m3_tap.mp3", "audio/m3_match.mp3",
     "audio/m3_pop.mp3", "audio/m3_sparkle.mp3", "audio/m3_finish.mp3",

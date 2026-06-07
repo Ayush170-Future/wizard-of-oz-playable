@@ -114,6 +114,7 @@
       var HAND_URL = pub("hand.webp");
       var LOGO_URL = pub("woz-logo.webp");
       var PLAY_URL = pub("play-now.webp");
+      var TAP_URL = pub("tap-to-start.webp");
       var HERO_URL = pub("tinman-hero.webp");
       // Sounds lifted from the original WoZ Magic Match playable.
       // bgm=BGM, swap=tap_click, match=match_sfx, pop=Bubble_Pop,
@@ -323,7 +324,8 @@
       }
 
       var bgSprite = null;
-      var startBg = null;       // checkerboard backdrop shown only on the start screen
+      var startBlur = null;     // blur filter applied to the scene on the start screen
+      var startDim = null;      // dark wash over the blurred start-screen scene
       var frameSprite = null;
       var titleText = null;
       var SPARKLE_TEX = null;   // per-gem-type star-burst textures (set on load)
@@ -423,7 +425,7 @@
       function loadAssets(cb) {
         var tin = [TINMAN_URLS.chest, TINMAN_URLS.arm, TINMAN_URLS.leg].concat(TINMAN_URLS.heads);
         var urls = [BACKGROUND_URL, FRAME_URL, BOARD_URL]
-          .concat(ICON_URLS).concat(tin).concat(NUT_URLS).concat([HAND_URL, LOGO_URL, PLAY_URL, HERO_URL])
+          .concat(ICON_URLS).concat(tin).concat(NUT_URLS).concat([HAND_URL, LOGO_URL, PLAY_URL, TAP_URL, HERO_URL])
           .concat(SPARKLE_URLS);
         Promise.all(urls.map(function (u) { return PIXI.Assets.load(u); })).then(function (r) {
           var i = 0, take = function (n) { var out = []; for (var k = 0; k < n; k++) out.push(r[i++]); return out; };
@@ -431,12 +433,12 @@
           var icons = take(ICON_URLS.length);
           var chest = r[i++], arm = r[i++], leg = r[i++], heads = take(TINMAN_URLS.heads.length);
           var nuts = take(NUT_URLS.length);
-          var hand = r[i++], logo = r[i++], play = r[i++], hero = r[i++];
+          var hand = r[i++], logo = r[i++], play = r[i++], tap = r[i++], hero = r[i++];
           var sparkles = take(SPARKLE_URLS.length);
           cb({
             background: background, frame: frame, board: board, icons: icons,
             tinman: { chest: chest, arm: arm, leg: leg, heads: heads },
-            nuts: nuts, hand: hand, logo: logo, play: play, hero: hero, sparkles: sparkles
+            nuts: nuts, hand: hand, logo: logo, play: play, tap: tap, hero: hero, sparkles: sparkles
           });
         }).catch(function (err) {
           showError("Assets failed to load.", urls.join("\n") + "\n\n" + (err && err.message ? err.message : String(err)));
@@ -1472,30 +1474,19 @@
         bgLayer.addChild(bgSprite);
       }
 
-      // Start-screen backdrop: solid blue with a very faint checkerboard (option 5).
-      // Drawn once into a canvas texture, sized to the design space and stretched to
-      // cover (same as the scene bg). It sits above the scene bg and is hidden on the
-      // start tap so gameplay shows the real background untouched.
-      function createStartBg() {
-        var BASE = "#1f3a8a";                 // blue base
-        var LIGHT = "rgba(255,255,255,0.035)"; // faint warm checker
-        var DARK = "rgba(0,0,0,0.04)";         // faint dark checker
-        var CELL = Math.round(DESIGN_W / 16);  // ~59px square → ~8 checks across (2 cells = 1 pair)
-        var cv = document.createElement("canvas");
-        cv.width = DESIGN_W; cv.height = DESIGN_H;
-        var g = cv.getContext("2d");
-        g.fillStyle = BASE;
-        g.fillRect(0, 0, DESIGN_W, DESIGN_H);
-        var cols = Math.ceil(DESIGN_W / CELL), rows = Math.ceil(DESIGN_H / CELL);
-        for (var r = 0; r < rows; r++) {
-          for (var cx = 0; cx < cols; cx++) {
-            g.fillStyle = ((r + cx) % 2 === 0) ? LIGHT : DARK;
-            g.fillRect(cx * CELL, r * CELL, CELL, CELL);
-          }
+      // Start-screen backdrop: the live game scene, BLURRED, with a soft dark wash so
+      // the sharp Tin Man / title / CTA read clearly on top. The blur + wash ease to
+      // zero on the start tap, snapping the scene into focus as gameplay begins.
+      function createStartBackdrop() {
+        if (bgSprite) {
+          startBlur = new PIXI.BlurFilter(12);   // blur radius
+          startBlur.quality = 5;
+          bgSprite.filters = [startBlur];
         }
-        startBg = new PIXI.Sprite(PIXI.Texture.from(cv));
-        startBg.width = DESIGN_W; startBg.height = DESIGN_H;
-        bgLayer.addChild(startBg);           // above the scene bg, below frame/hero/UI
+        // Soft dark wash over the blurred scene (lifts contrast for the UI on top).
+        startDim = new PIXI.Graphics();
+        startDim.beginFill(0x0a1020, 0.30).drawRect(0, 0, DESIGN_W, DESIGN_H).endFill();
+        bgLayer.addChild(startDim);              // above the scene bg, below frame/hero/UI
       }
 
       function createLogo(texture) {
@@ -1590,45 +1581,47 @@
       // the logo beneath. One tap unlocks audio + BGM and reveals the game. Lives in
       // uiLayer, so it inherits portrait/wide scaling.
       var startPrompt = null;
-      function createStartScreen(playTex, handTex) {
+      // Tap-to-play CTA: the "TAP TO START" plaque art (tap-to-start.webp — glossy
+      // blue bevel text, gold flourish, sparkle glow baked in) with the tutorial hand
+      // tapping it. Lives in uiLayer so it inherits portrait/wide scaling.
+      function createStartScreen(tapTex, handTex) {
         var c = new PIXI.Container();
         c.position.set(DESIGN_W / 2, layout.board.y);
 
-        var btnW = 580;                                   // design-space button width
-        var btn = new PIXI.Sprite(playTex);
+        var ctaW = 720;                                   // design-space plaque width (incl. glow margins)
+        var btn = new PIXI.Sprite(tapTex);
         btn.anchor.set(0.5);
-        btn.scale.set(btnW / playTex.width);
+        var btnBase = ctaW / tapTex.width;
+        btn.scale.set(btnBase);
         c.addChild(btn);
         var btnH = btn.height;
-        c.dW = btnW; c.dH = btnH * 1.32;                  // bounds incl. the tapping hand
+        c.dW = ctaW; c.dH = btnH * 1.2;                   // bounds incl. the tapping hand
 
-        // Tutorial hand tapping the ribbon (fingertip on the button face).
+        // Tutorial hand tapping the plaque (fingertip near the text centre).
         var hand = new PIXI.Sprite(handTex);
         hand.anchor.set(0.08, 0.04);                      // fingertip
-        var hs = (btnW * 0.40) / handTex.width;
+        var hs = (ctaW * 0.30) / handTex.width;
         hand.baseScale = hs; hand.scale.set(hs);
-        var hx = btnW * 0.12, hy = btnH * 0.12;           // rest position (fingertip near centre)
+        var hx = ctaW * 0.10, hy = btnH * 0.06;           // rest position (fingertip near centre)
         hand.position.set(hx, hy);
         c.addChild(hand);
 
         uiLayer.addChild(c);
         startPrompt = c;
 
-        // Smooth, continuous tap loop. press = sin²(phase·π) is a single hump that
-        // starts and ends at zero velocity, so there's no snap at the loop seam and
-        // no dead "rest" frame — the hand glides down and lifts in one fluid motion,
-        // the ribbon dipping with it. (No separate breathing pulse, which read jittery.)
+        // Smooth, continuous tap loop. press = sin²(phase·π) is a single hump with
+        // zero velocity at both ends, so the loop seam never snaps — the hand glides
+        // down and lifts in one fluid motion, the plaque dipping with it.
         c.baseScale = 1;
-        var btnBase = btnW / playTex.width;
         var t = 0, T = 1.25;
         c.__pulse = function () {
           t += app.ticker.deltaMS / 1000;
           c.scale.set(c.baseScale);                                // apply layout scale only
           var ph = (t % T) / T;
-          var press = Math.pow(Math.sin(ph * Math.PI), 2);         // smooth 0→1→0, zero slope at ends
+          var press = Math.pow(Math.sin(ph * Math.PI), 2);         // smooth 0→1→0
           hand.scale.set(hand.baseScale * (1 - 0.11 * press));
           hand.position.set(hx - 5 * press, hy + 17 * press);
-          btn.scale.set(btnBase * (1 - 0.025 * press));
+          btn.scale.set(btnBase * (1 - 0.03 * press));             // plaque dips on press
         };
         app.ticker.add(c.__pulse);
       }
@@ -1642,16 +1635,23 @@
         if (titleText) titleText.visible = true;
         if (bottomCta) bottomCta.visible = true;
 
-        // Fade the start-screen checkerboard out, revealing the real scene bg.
-        if (startBg) {
-          var sb = startBg; startBg = null;
-          var sf = 0;
-          var sbFade = function () {
-            sf += app.ticker.deltaMS / 220;
-            sb.alpha = Math.max(0, 1 - sf);
-            if (sf >= 1) { app.ticker.remove(sbFade); sb.visible = false; }
+        // Snap the scene into focus: ease the start-screen blur + dark wash to zero.
+        if (startBlur || startDim) {
+          var bf = startBlur, dim = startDim; startBlur = null; startDim = null;
+          var s0 = bf ? bf.strength : 0;
+          var uf = 0;
+          var unblur = function () {
+            uf += app.ticker.deltaMS / 260;
+            var k = Math.min(1, uf);
+            if (bf) bf.strength = s0 * (1 - k);
+            if (dim) dim.alpha = 1 - k;
+            if (k >= 1) {
+              app.ticker.remove(unblur);
+              if (bgSprite) bgSprite.filters = null;   // drop the filter once sharp
+              if (dim && dim.parent) dim.parent.removeChild(dim);
+            }
           };
-          app.ticker.add(sbFade);
+          app.ticker.add(unblur);
         }
         layoutScene();   // reflow to the in-game layout (logo → bottom-left, CTA → bottom-right)
 
@@ -1687,7 +1687,6 @@
         bgLayer.scale.set(coverScale);
         bgLayer.position.set((vw - DESIGN_W * coverScale) / 2, (vh - DESIGN_H * coverScale) / 2);
         if (bgSprite) { bgSprite.width = DESIGN_W; bgSprite.height = DESIGN_H; }
-        if (startBg) { startBg.width = DESIGN_W; startBg.height = DESIGN_H; }
 
         var sa = getSafeInsets();
         var padTop = sa.top + 8, padBottom = sa.bottom + 8;
@@ -1922,7 +1921,7 @@
 
         loadAssets(function (assets) {
           createBackground(assets.background);
-          createStartBg();
+          createStartBackdrop();
           createFrame(assets.frame);
           createTinMan(assets.tinman, assets.nuts);
           SPARKLE_TEX = assets.sparkles;
@@ -1932,7 +1931,7 @@
           createCta(assets.play);
           endTextures = { logo: assets.logo, play: assets.play, hero: assets.hero };
           createTitle();
-          createStartScreen(assets.play, assets.hand);
+          createStartScreen(assets.tap, assets.hand);
 
           // Start-screen state: hold gameplay behind the tap. Keep the Tin Man,
           // frame, background, "Save the Tin Man!" title and logo visible; hide the
