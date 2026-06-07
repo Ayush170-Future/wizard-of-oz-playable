@@ -81,16 +81,20 @@
 
       var DESIGN_W = 941;
       var DESIGN_H = 1672;
-      var BACKGROUND_URL = new URL("../public/background.webp", window.location.href).href;
-      var FRAME_URL = new URL("../public/frame.webp", window.location.href).href;
-      var BOARD_URL = new URL("../public/match3sheet.webp", window.location.href).href;
+      // Resolve an asset: inlined base64 (single-file build) if present, else
+      // the external ../public file (dev / GitHub Pages).
+      function assetURL(rel) {
+        if (window.__ASSETS && window.__ASSETS[rel]) return window.__ASSETS[rel];
+        return new URL("../public/" + rel, window.location.href).href;
+      }
+      function pub(name) { return assetURL(name); }
+      var BACKGROUND_URL = assetURL("background.webp");
+      var FRAME_URL = assetURL("frame.webp");
+      var BOARD_URL = assetURL("match3sheet.webp");
       var ICON_URLS = [
-        new URL("../public/gem_flower.webp", window.location.href).href,
-        new URL("../public/gem_bow.webp", window.location.href).href,
-        new URL("../public/gem_gold.webp", window.location.href).href,
-        new URL("../public/gem_heart.webp", window.location.href).href
+        assetURL("gem_flower.webp"), assetURL("gem_bow.webp"),
+        assetURL("gem_gold.webp"), assetURL("gem_heart.webp")
       ];
-      function pub(name) { return new URL("../public/" + name, window.location.href).href; }
       var TINMAN_URLS = {
         chest: pub("tinman_chest.webp"),
         arm: pub("tinman_arm.webp"),
