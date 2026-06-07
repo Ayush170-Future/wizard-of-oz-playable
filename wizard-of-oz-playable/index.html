@@ -36,10 +36,45 @@
       border-radius: 8px;
       word-break: break-all;
     }
+    /* Tap-to-start gate: a single real DOM tap reliably unlocks iOS audio +
+       starts BGM before any gameplay, so the AudioContext is already running
+       by the first swipe (intercepting PIXI canvas gestures was not enough). */
+    #tapStart {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(20, 8, 30, 0.74);
+      -webkit-backdrop-filter: blur(2px);
+      backdrop-filter: blur(2px);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.25s ease;
+    }
+    #tapStart.hide { opacity: 0; pointer-events: none; }
+    #tapStart .pill {
+      padding: 18px 44px;
+      border-radius: 999px;
+      background: linear-gradient(#ffe566, #ffb800 70%, #e68a00);
+      color: #5c2e00;
+      font: bold 30px/1 Georgia, "Times New Roman", serif;
+      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
+      box-shadow: 0 6px 0 #b97e00, 0 12px 26px rgba(0, 0, 0, 0.55);
+      animation: tapPulse 1.1s ease-in-out infinite;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    @keyframes tapPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.07); }
+    }
   </style>
 </head>
 <body>
   <div id="game"></div>
+  <div id="tapStart"><div class="pill">▶ Tap to Play</div></div>
   <div id="error"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
@@ -1664,6 +1699,26 @@
           WOZAudio.unlock();
         }
         unlockEvents.forEach(function (ev) { document.addEventListener(ev, unlockOnce, true); });
+
+        // Tap-to-start gate: dismiss the overlay on one real tap, unlocking audio
+        // + BGM up front. touchend (the discrete tap iOS treats as user activation)
+        // is the reliable unlock; click covers desktop/mouse. preventDefault stops
+        // the synthetic click that would otherwise re-fire beginPlay.
+        var tapStart = document.getElementById("tapStart");
+        if (tapStart) {
+          var begun = false;
+          var beginPlay = function () {
+            if (begun) return;
+            begun = true;
+            WOZAudio.unlock();
+            tapStart.className = "hide";
+            setTimeout(function () {
+              if (tapStart.parentNode) tapStart.parentNode.removeChild(tapStart);
+            }, 300);
+          };
+          tapStart.addEventListener("touchend", function (e) { e.preventDefault(); beginPlay(); }, { passive: false });
+          tapStart.addEventListener("click", beginPlay);
+        }
 
         // On-device audio diagnostics: load ...index.html?debug on the phone to
         // see a live readout (context state, decoded count, last error) pinned
