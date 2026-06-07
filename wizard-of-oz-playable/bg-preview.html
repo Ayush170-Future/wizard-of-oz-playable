@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start-screen BG options</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0b1020; color: #cdd6f4;
+    font: 14px/1.4 -apple-system, system-ui, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  p.note { margin: 0 0 24px; color: #8b93b8; }
+  .grid {
+    display: grid; gap: 28px 22px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+  figure { margin: 0; }
+  .card {
+    /* real playable aspect: 941 x 1672 ≈ 9:16 */
+    aspect-ratio: 941 / 1672;
+    width: 100%;
+    border-radius: 14px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  /* --- mock start-screen content overlaid on every option --- */
+  .content {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: space-between;
+    padding: 9% 8%;
+    text-align: center;
+  }
+  .title {
+    font-weight: 800; font-size: clamp(16px, 5.5vw, 26px);
+    letter-spacing: .5px; color: #fff;
+    text-shadow: 0 2px 0 rgba(0,0,0,.35), 0 0 18px rgba(0,0,0,.5);
+  }
+  .hero {
+    width: 46%; aspect-ratio: 1; border-radius: 50%;
+    background: radial-gradient(circle at 50% 40%, #d9e2ff55, #d9e2ff00 60%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px;
+  }
+  .cta {
+    font-weight: 800; font-size: clamp(13px, 4.5vw, 20px);
+    color: #2a1300; padding: 10px 22px; border-radius: 999px;
+    background: linear-gradient(#ffe08a, #f4b740);
+    box-shadow: 0 4px 0 #b8801f, 0 6px 14px rgba(0,0,0,.4);
+  }
+  figcaption { margin-top: 10px; font-weight: 600; }
+  figcaption small { display: block; font-weight: 400; color: #8b93b8; }
+
+  /* ============ BACKGROUND OPTIONS ============ */
+
+  /* 1. Solid flat blue */
+  .bg1 { background: #1f3a8a; }
+
+  /* 2. Vertical deep-blue gradient (lighter top, dark bottom) */
+  .bg2 { background: linear-gradient(#2a4fb5 0%, #16245e 100%); }
+
+  /* 3. Solid blue + faint diagonal pinstripes */
+  .bg3 {
+    background:
+      repeating-linear-gradient(45deg,
+        rgba(255,255,255,.05) 0 2px,
+        rgba(255,255,255,0) 2px 14px),
+      #1f3a8a;
+  }
+
+  /* 4. Blue + subtle grid / checks */
+  .bg4 {
+    background:
+      linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px) 0 0 / 100% 28px,
+      linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px) 0 0 / 28px 100%,
+      #1d357f;
+  }
+
+  /* 5. Diagonal two-tone blue (subtle checkerboard of light/dark) */
+  .bg5 {
+    background:
+      repeating-conic-gradient(from 0deg at 50% 50%,
+        rgba(255,255,255,.035) 0deg 90deg,
+        rgba(0,0,0,.04) 90deg 180deg) 0 0 / 56px 56px,
+      #1f3a8a;
+  }
+
+  /* 6. Radial glow center + faint grid (my pick to compare) */
+  .bg6 {
+    background:
+      radial-gradient(120% 80% at 50% 38%, #3b63d8 0%, #1b2c6e 55%, #0f1840 100%),
+      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px) 0 0 / 100% 30px,
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px) 0 0 / 30px 100%;
+  }
+</style>
+</head>
+<body>
+  <h1>Start-screen background — blue options</h1>
+  <p class="note">All at the real 9:16 playable aspect, with mock title / hero / CTA on top so you can judge in context. All procedural (CSS) — no image assets.</p>
+
+  <div class="grid">
+    <figure>
+      <div class="card bg1"><div class="content">
+        <div class="title">Save the Tin&nbsp;Man!</div><div class="hero">🤖</div><div class="cta">Tap to Play!</div>
+      </div></div>
+      <figcaption>1 · Flat solid blue<small>cleanest, can read a touch plain</small></figcaption>
+    </figure>
+
+    <figure>
+      <div class="card bg2"><div class="content">
+        <div class="title">Save the Tin&nbsp;Man!</div><div class="hero">🤖</div><div class="cta">Tap to Play!</div>
+      </div></div>
+      <figcaption>2 · Vertical gradient<small>adds depth, still simple</small></figcaption>
+    </figure>
+
+    <figure>
+      <div class="card bg3"><div class="content">
+        <div class="title">Save the Tin&nbsp;Man!</div><div class="hero">🤖</div><div class="cta">Tap to Play!</div>
+      </div></div>
+      <figcaption>3 · Diagonal pinstripes<small>subtle texture, lines</small></figcaption>
+    </figure>
+
+    <figure>
+      <div class="card bg4"><div class="content">
+        <div class="title">Save the Tin&nbsp;Man!</div><div class="hero">🤖</div><div class="cta">Tap to Play!</div>
+      </div></div>
+      <figcaption>4 · Faint grid / checks<small>the "checks" idea</small></figcaption>
+    </figure>
+
+    <figure>
+      <div class="card bg5"><div class="content">
+        <div class="title">Save the Tin&nbsp;Man!</div><div class="hero">🤖</div><div class="cta">Tap to Play!</div>
+      </div></div>
+      <figcaption>5 · Diagonal checkerboard<small>more pattern, playful</small></figcaption>
+    </figure>
+
+    <figure>
+      <div class="card bg6"><div class="content">
+        <div class="title">Save the Tin&nbsp;Man!</div><div class="hero">🤖</div><div class="cta">Tap to Play!</div>
+      </div></div>
+      <figcaption>6 · Radial glow + faint grid<small>depth + texture, eye → center</small></figcaption>
+    </figure>
+  </div>
+</body>
+</html>
