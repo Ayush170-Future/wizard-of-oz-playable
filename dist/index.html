@@ -1257,7 +1257,7 @@ void main(void)\r
         // diagnostics (read by the ?debug overlay): how many sounds asked/decoded,
         // and the last decode/load error message (iOS Safari's mp3 decoder is
         // pickier than Android's, so a silent decode failure is the prime suspect).
-        nReq: 0, nDecoded: 0, lastErr: "",
+        nReq: 0, nDecoded: 0, lastErr: "", lastPlay: "", pending: [],
         init: function () {
           var AC = window.AudioContext || window.webkitAudioContext;
           if (!AC) return;
@@ -1281,6 +1281,14 @@ void main(void)\r
                 self.buffers[name] = buf;
                 self.nDecoded++;
                 if (name === "bgm" && self.started) self.startBgm();
+                // Replay any sound that was requested before this buffer decoded.
+                if (self.pending.length) {
+                  var still = [];
+                  self.pending.forEach(function (p) {
+                    if (p.name === name) self.play(p.name, p.vol); else still.push(p);
+                  });
+                  self.pending = still;
+                }
               }).catch(function (e) {
                 // Don't stay silent about silence: record why a sound failed to
                 // load/decode so the ?debug overlay can show it on-device.
@@ -1336,18 +1344,27 @@ void main(void)\r
           this.bgmOn = true;
         },
         play: function (name, vol) {
-          if (!this.ctx || this.muted || !this.buffers[name]) return;
+          if (!this.ctx || this.muted) { this.lastPlay = name + ": skip(noctx/mute)"; return; }
           var self = this;
+          // Buffer not decoded yet? Queue it and fire the moment it lands, so an
+          // early first swipe isn't silently dropped (decode can lag on iOS).
+          if (!this.buffers[name]) {
+            this.lastPlay = name + ": PENDING(not decoded), state=" + this.ctx.state;
+            this.pending.push({ name: name, vol: vol });
+            if (this.ctx.state !== "running" && this.ctx.resume) this.ctx.resume();
+            return;
+          }
           var fire = function () {
             var s = self.ctx.createBufferSource(); s.buffer = self.buffers[name];
             var g = self.ctx.createGain(); g.gain.value = (vol == null ? 1 : vol);
             s.connect(g); g.connect(self.master); s.start(0);
+            self.lastPlay = name + ": fired @state=" + self.ctx.state;
           };
           // iOS: resume() is async. Starting a source while the context is still
-          // "suspended" silently drops the sound (Android tolerates it), which is
-          // why the very first swipe's SFX was inaudible on iPhone. Defer the
+          // "suspended" silently drops the sound (Android tolerates it). Defer the
           // start until the context is actually running.
           if (this.ctx.state !== "running" && this.ctx.resume) {
+            this.lastPlay = name + ": deferred(state=" + this.ctx.state + ")";
             this.ctx.resume().then(fire).catch(function () {});
           } else {
             fire();
@@ -2769,6 +2786,8 @@ void main(void)\r
               "\nunlocked(started): " + a.started + "   bgmOn: " + a.bgmOn + "   muted: " + a.muted +
               "\ndecoded: " + a.nDecoded + "/" + a.nReq +
               "\nsessEl: " + (a.sessEl ? (a.sessEl.paused ? "paused" : "playing") : "none") +
+              "\nlastPlay: " + (a.lastPlay || "(none)") +
+              "\npending: " + a.pending.length +
               "\nlastErr: " + (a.lastErr || "(none)");
           }, 250);
         }
