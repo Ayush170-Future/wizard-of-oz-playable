@@ -36,45 +36,10 @@
       border-radius: 8px;
       word-break: break-all;
     }
-    /* Tap-to-start gate: a single real DOM tap reliably unlocks iOS audio +
-       starts BGM before any gameplay, so the AudioContext is already running
-       by the first swipe (intercepting PIXI canvas gestures was not enough). */
-    #tapStart {
-      position: fixed;
-      inset: 0;
-      z-index: 5;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(20, 8, 30, 0.74);
-      -webkit-backdrop-filter: blur(2px);
-      backdrop-filter: blur(2px);
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-      transition: opacity 0.25s ease;
-    }
-    #tapStart.hide { opacity: 0; pointer-events: none; }
-    #tapStart .pill {
-      padding: 18px 44px;
-      border-radius: 999px;
-      background: linear-gradient(#ffe566, #ffb800 70%, #e68a00);
-      color: #5c2e00;
-      font: bold 30px/1 Georgia, "Times New Roman", serif;
-      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
-      box-shadow: 0 6px 0 #b97e00, 0 12px 26px rgba(0, 0, 0, 0.55);
-      animation: tapPulse 1.1s ease-in-out infinite;
-      -webkit-user-select: none;
-      user-select: none;
-    }
-    @keyframes tapPulse {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.07); }
-    }
   </style>
 </head>
 <body>
   <div id="game"></div>
-  <div id="tapStart"><div class="pill">▶ Tap to Play</div></div>
   <div id="error"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
@@ -380,6 +345,7 @@
       var boardState = { cols: 0, rows: 0, cells: [], center: [], cellW: 0 };
       var dragStart = null;   // { row, col, gx, gy } pointer-down on a gem
       var swapping = false;   // input lock while a swap animates
+      var gameLive = false;   // false until the player taps the start screen
 
       // Layout anchors (design-space pixels, 941×1672)
       // Frame is the wooden stage across the top; its transparent window
@@ -987,7 +953,7 @@
       }
 
       function showHintForCurrent() {
-        if (boardState.won) return;
+        if (!gameLive || boardState.won) return;   // no hint until the start tap
         showHint(findHintMove());
       }
 
@@ -1540,28 +1506,94 @@
         });
       }
 
-      function createTitle() {
-        var style = new PIXI.TextStyle({
+      // Shared gilded WoZ lettering (gold gradient, brown stroke, soft shadow).
+      function goldTextStyle(size, wrapW) {
+        return new PIXI.TextStyle({
           fontFamily: "Georgia, 'Times New Roman', serif",
-          fontSize: 52,
+          fontSize: size,
           fontWeight: "bold",
           fill: ["#ffe566", "#ffb800", "#e68a00"],
           fillGradientType: 0,
           stroke: "#5c2e00",
-          strokeThickness: 6,
+          strokeThickness: Math.max(4, Math.round(size * 0.12)),
           lineJoin: "round",
           dropShadow: true,
           dropShadowColor: "#000000",
           dropShadowBlur: 4,
           dropShadowDistance: 3,
           align: "center",
-          wordWrap: true,
-          wordWrapWidth: DESIGN_W - 80
+          wordWrap: !!wrapW,
+          wordWrapWidth: wrapW || 100
         });
+      }
 
-        titleText = new PIXI.Text("Save the Tin Man!", style);
+      function createTitle() {
+        titleText = new PIXI.Text("Save the Tin Man!", goldTextStyle(52, DESIGN_W - 80));
         titleText.anchor.set(0.5);
         uiLayer.addChild(titleText);
+      }
+
+      // ---- Tap-to-play start screen ----
+      // Built from the live scene: the in-game "Save the Tin Man!" title sits on
+      // top, the Tin Man hangs in his frame, and a single gilded "Tap to Play!"
+      // plaque sits below him, with the logo beneath. One tap unlocks audio + BGM
+      // and reveals the game. Lives in uiLayer, so it inherits portrait/wide scaling.
+      var startPrompt = null;
+      function createStartScreen() {
+        var c = new PIXI.Container();
+        c.position.set(DESIGN_W / 2, layout.board.y);
+
+        var W = PLAQUE_W, H = PLAQUE_H, R = 26;
+        var plaque = new PIXI.Graphics();
+        plaque.beginFill(0x2a1607, 0.9);
+        plaque.lineStyle({ width: 6, color: 0xFFC23C, alpha: 0.95 });
+        plaque.drawRoundedRect(-W / 2, -H / 2, W, H, R);
+        plaque.endFill();
+        plaque.lineStyle({ width: 2, color: 0xFFE9A8, alpha: 0.5 });   // gilded inner bevel
+        plaque.drawRoundedRect(-W / 2 + 10, -H / 2 + 10, W - 20, H - 20, R - 8);
+        c.addChild(plaque);
+
+        var t = new PIXI.Text("▶  Tap to Play!", goldTextStyle(46, W - 56));
+        t.anchor.set(0.5); t.position.set(0, 0); t.resolution = 3;
+        c.addChild(t);
+
+        uiLayer.addChild(c);
+        startPrompt = c;
+
+        // gentle invite pulse, layered on top of the layout-driven base scale so
+        // portrait (base 1) and wide (base fit-to-column) both pulse correctly
+        c.baseScale = 1;
+        var t = 0;
+        c.__pulse = function () {
+          t += app.ticker.deltaMS / 1000;
+          c.scale.set(c.baseScale * (1 + 0.028 * Math.sin(t * 3.0)));
+        };
+        app.ticker.add(c.__pulse);
+      }
+
+      function beginGame() {
+        if (gameLive) return;
+        gameLive = true;
+        WOZAudio.unlock();   // resume context + start BGM up front (context is now warm)
+
+        boardLayer.visible = true;
+        if (titleText) titleText.visible = true;
+        if (bottomCta) bottomCta.visible = true;
+        layoutScene();   // reflow to the in-game layout (logo → bottom-left, CTA → bottom-right)
+
+        if (startPrompt) {
+          var p = startPrompt; startPrompt = null;
+          if (p.__pulse) app.ticker.remove(p.__pulse);
+          var f = 0;
+          var fade = function () {
+            f += app.ticker.deltaMS / 200;          // ~200ms fade
+            p.alpha = Math.max(0, 1 - f);
+            p.scale.set(1 + 0.06 * f);               // slight zoom-out as it leaves
+            if (f >= 1) { app.ticker.remove(fade); if (p.parent) p.parent.removeChild(p); }
+          };
+          app.ticker.add(fade);
+        }
+        setTimeout(showHintForCurrent, 600);
       }
 
       // Above this width:height ratio (tablets & any landscape) we switch to a
@@ -1630,6 +1662,13 @@
         function toDesignX(sx) { return (sx - offX) / scale; }
         function toDesignY(sy) { return (sy - offY) / scale; }
 
+        // Start screen has its own balanced composition (logo + CTA plaque),
+        // since the in-game title and store CTA are hidden until the tap.
+        if (!gameLive && startPrompt) {
+          layoutStartScreen(wide, vw, vh, scale, offX, offY, sa, padTop, padBottom, toDesignX, toDesignY);
+          return;
+        }
+
         if (!wide) {
           if (titleText) { titleText.resolution = 1; titleText.style.wordWrapWidth = DESIGN_W - 80; titleText.scale.set(1); titleText.position.set(layout.title.x, layout.title.y); }
           if (bottomLogo) { bottomLogo.baseScale = layout.logo.width / bottomLogo.texture.width; bottomLogo.scale.set(bottomLogo.baseScale); bottomLogo.position.set(layout.logo.cx, layout.logo.cy); }
@@ -1675,6 +1714,81 @@
         }
       }
 
+      // Balanced start-screen composition. Portrait: the CTA plaque sits in the
+      // board's place and the logo is CENTRED beneath it (the in-game logo is
+      // bottom-left, paired with the store CTA — but that CTA is hidden here, so a
+      // left-anchored logo would look lopsided). Wide: logo + plaque stack, centred
+      // as a group in the left column, with the Tin Man hero on the right.
+      var PLAQUE_W = 470, PLAQUE_H = 132;   // design-space size of the CTA plaque
+      function layoutStartScreen(wide, vw, vh, scale, offX, offY, sa, padTop, padBottom, toDesignX, toDesignY) {
+        if (!wide) {
+          // Stack: "Save the Tin Man!" title (top) → Tin Man frame → "Tap to Play!"
+          // → logo. The frame block occupies ~105..820; the prompt and logo split
+          // the space below it down to the bottom margin with even spacing.
+          if (titleText) {
+            titleText.resolution = 1;
+            titleText.style.wordWrapWidth = DESIGN_W - 80;
+            titleText.scale.set(1);
+            titleText.position.set(layout.title.x, layout.title.y);
+          }
+          var frameBottom = 840, bottomMargin = 1600;
+          var band = bottomMargin - frameBottom;        // vertical room for prompt + logo
+          if (startPrompt) {
+            startPrompt.baseScale = 1;
+            startPrompt.position.set(DESIGN_W / 2, frameBottom + band * 0.32);
+          }
+          if (bottomLogo) {
+            var lw = 232;   // stands alone, so a touch larger than the in-game 144
+            bottomLogo.baseScale = lw / bottomLogo.texture.width;
+            bottomLogo.scale.set(bottomLogo.baseScale);
+            bottomLogo.position.set(DESIGN_W / 2, frameBottom + band * 0.78);
+          }
+          return;
+        }
+
+        // Wide: logo + CTA plaque stacked and centred as a group in the left
+        // branding column, with the Tin Man hero on the right. Keeps the call to
+        // action prominent (it's the whole point) while staying balanced.
+        var leftL = sa.left + Math.max(10, vw * 0.025);
+        var colW = Math.max(40, offX - leftL - Math.max(8, vw * 0.015));
+        var cx = leftL + colW / 2;
+        var topY = padTop + Math.max(14, vh * 0.045);
+        var botY = vh - padBottom - Math.max(14, vh * 0.045);
+        var colH = Math.max(1, botY - topY);
+
+        // Stack: "Save the Tin Man!" title → logo → "Tap to Play!" plaque, centred
+        // as a group in the left column; Tin Man hero on the right.
+        var titleH = 0;
+        if (titleText) {
+          titleText.resolution = 4;
+          titleText.style.wordWrapWidth = 320;
+          titleText.scale.set(1);
+          var tnW = titleText.width || 300, tnH = titleText.height || 120;
+          var tFit = Math.min((colW * 0.96) / tnW, (colH * 0.26) / tnH);
+          titleText.scale.set(tFit / scale);
+          titleH = tnH * tFit;                                              // screen px
+        }
+        var logoFit = bottomLogo ? Math.min((colW * 0.74) / bottomLogo.texture.width, (colH * 0.26) / bottomLogo.texture.height) : 0;
+        var logoH = bottomLogo ? bottomLogo.texture.height * logoFit : 0;   // screen px
+        var plaqueFit = Math.min((colW * 0.96) / PLAQUE_W, (colH * 0.26) / PLAQUE_H);
+        var plaqueH = PLAQUE_H * plaqueFit;                                  // screen px
+
+        var gap = Math.max(20, colH * 0.07);
+        var stackH = titleH + gap + logoH + gap + plaqueH;
+        var stackTop = topY + (colH - stackH) / 2;
+
+        if (titleText) titleText.position.set(toDesignX(cx), toDesignY(stackTop + titleH / 2));
+        if (bottomLogo) {
+          bottomLogo.baseScale = logoFit / scale;
+          bottomLogo.scale.set(bottomLogo.baseScale);
+          bottomLogo.position.set(toDesignX(cx), toDesignY(stackTop + titleH + gap + logoH / 2));
+        }
+        if (startPrompt) {
+          startPrompt.baseScale = plaqueFit / scale;
+          startPrompt.position.set(toDesignX(cx), toDesignY(stackTop + titleH + gap + logoH + gap + plaqueH / 2));
+        }
+      }
+
       function onResize() {
         layoutScene();
       }
@@ -1699,26 +1813,6 @@
           WOZAudio.unlock();
         }
         unlockEvents.forEach(function (ev) { document.addEventListener(ev, unlockOnce, true); });
-
-        // Tap-to-start gate: dismiss the overlay on one real tap, unlocking audio
-        // + BGM up front. touchend (the discrete tap iOS treats as user activation)
-        // is the reliable unlock; click covers desktop/mouse. preventDefault stops
-        // the synthetic click that would otherwise re-fire beginPlay.
-        var tapStart = document.getElementById("tapStart");
-        if (tapStart) {
-          var begun = false;
-          var beginPlay = function () {
-            if (begun) return;
-            begun = true;
-            WOZAudio.unlock();
-            tapStart.className = "hide";
-            setTimeout(function () {
-              if (tapStart.parentNode) tapStart.parentNode.removeChild(tapStart);
-            }, 300);
-          };
-          tapStart.addEventListener("touchend", function (e) { e.preventDefault(); beginPlay(); }, { passive: false });
-          tapStart.addEventListener("click", beginPlay);
-        }
 
         // On-device audio diagnostics: load ...index.html?debug on the phone to
         // see a live readout (context state, decoded count, last error) pinned
@@ -1760,10 +1854,23 @@
           createCta(assets.play);
           endTextures = { logo: assets.logo, play: assets.play, hero: assets.hero };
           createTitle();
+          createStartScreen();
+
+          // Start-screen state: hold gameplay behind the tap. Keep the Tin Man,
+          // frame, background, "Save the Tin Man!" title and logo visible; hide the
+          // board and the store CTA until the player taps to begin.
+          boardLayer.visible = false;
+          if (bottomCta) bottomCta.visible = false;
           layoutScene();
 
+          function onStartTap() { stage.off("pointertap", onStartTap); beginGame(); }
+          stage.on("pointertap", onStartTap);
+
           // QA hook for testing the release flow without match detection
-          if (window.location.search.indexOf("qa") >= 0) window.__releaseBolt = releaseNextBolt;
+          if (window.location.search.indexOf("qa") >= 0) {
+            window.__releaseBolt = releaseNextBolt;
+            window.__beginGame = beginGame;
+          }
         });
 
         window.addEventListener("resize", onResize);
