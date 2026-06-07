@@ -1337,10 +1337,21 @@ void main(void)\r
         },
         play: function (name, vol) {
           if (!this.ctx || this.muted || !this.buffers[name]) return;
-          if (this.ctx.state === "suspended") this.ctx.resume();
-          var s = this.ctx.createBufferSource(); s.buffer = this.buffers[name];
-          var g = this.ctx.createGain(); g.gain.value = (vol == null ? 1 : vol);
-          s.connect(g); g.connect(this.master); s.start(0);
+          var self = this;
+          var fire = function () {
+            var s = self.ctx.createBufferSource(); s.buffer = self.buffers[name];
+            var g = self.ctx.createGain(); g.gain.value = (vol == null ? 1 : vol);
+            s.connect(g); g.connect(self.master); s.start(0);
+          };
+          // iOS: resume() is async. Starting a source while the context is still
+          // "suspended" silently drops the sound (Android tolerates it), which is
+          // why the very first swipe's SFX was inaudible on iPhone. Defer the
+          // start until the context is actually running.
+          if (this.ctx.state !== "running" && this.ctx.resume) {
+            this.ctx.resume().then(fire).catch(function () {});
+          } else {
+            fire();
+          }
         },
         toggleMute: function () { this.setMuted(!this.muted); return this.muted; },
         setMuted: function (m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 1; }
