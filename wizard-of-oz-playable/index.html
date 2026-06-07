@@ -323,6 +323,7 @@
       }
 
       var bgSprite = null;
+      var startBg = null;       // checkerboard backdrop shown only on the start screen
       var frameSprite = null;
       var titleText = null;
       var SPARKLE_TEX = null;   // per-gem-type star-burst textures (set on load)
@@ -1471,6 +1472,32 @@
         bgLayer.addChild(bgSprite);
       }
 
+      // Start-screen backdrop: solid blue with a very faint checkerboard (option 5).
+      // Drawn once into a canvas texture, sized to the design space and stretched to
+      // cover (same as the scene bg). It sits above the scene bg and is hidden on the
+      // start tap so gameplay shows the real background untouched.
+      function createStartBg() {
+        var BASE = "#1f3a8a";                 // blue base
+        var LIGHT = "rgba(255,255,255,0.035)"; // faint warm checker
+        var DARK = "rgba(0,0,0,0.04)";         // faint dark checker
+        var CELL = Math.round(DESIGN_W / 16);  // ~59px square → ~8 checks across (2 cells = 1 pair)
+        var cv = document.createElement("canvas");
+        cv.width = DESIGN_W; cv.height = DESIGN_H;
+        var g = cv.getContext("2d");
+        g.fillStyle = BASE;
+        g.fillRect(0, 0, DESIGN_W, DESIGN_H);
+        var cols = Math.ceil(DESIGN_W / CELL), rows = Math.ceil(DESIGN_H / CELL);
+        for (var r = 0; r < rows; r++) {
+          for (var cx = 0; cx < cols; cx++) {
+            g.fillStyle = ((r + cx) % 2 === 0) ? LIGHT : DARK;
+            g.fillRect(cx * CELL, r * CELL, CELL, CELL);
+          }
+        }
+        startBg = new PIXI.Sprite(PIXI.Texture.from(cv));
+        startBg.width = DESIGN_W; startBg.height = DESIGN_H;
+        bgLayer.addChild(startBg);           // above the scene bg, below frame/hero/UI
+      }
+
       function createLogo(texture) {
         var sp = new PIXI.Sprite(texture);
         sp.anchor.set(0.5);
@@ -1551,7 +1578,7 @@
       }
 
       function createTitle() {
-        titleText = new PIXI.Text("Save the Tin Man!", goldTextStyle(66, DESIGN_W - 80));
+        titleText = new PIXI.Text("Save the Tin Man!", goldTextStyle(76, DESIGN_W - 80));
         titleText.anchor.set(0.5);
         uiLayer.addChild(titleText);
       }
@@ -1614,6 +1641,18 @@
         boardLayer.visible = true;
         if (titleText) titleText.visible = true;
         if (bottomCta) bottomCta.visible = true;
+
+        // Fade the start-screen checkerboard out, revealing the real scene bg.
+        if (startBg) {
+          var sb = startBg; startBg = null;
+          var sf = 0;
+          var sbFade = function () {
+            sf += app.ticker.deltaMS / 220;
+            sb.alpha = Math.max(0, 1 - sf);
+            if (sf >= 1) { app.ticker.remove(sbFade); sb.visible = false; }
+          };
+          app.ticker.add(sbFade);
+        }
         layoutScene();   // reflow to the in-game layout (logo → bottom-left, CTA → bottom-right)
 
         if (startPrompt) {
@@ -1648,6 +1687,7 @@
         bgLayer.scale.set(coverScale);
         bgLayer.position.set((vw - DESIGN_W * coverScale) / 2, (vh - DESIGN_H * coverScale) / 2);
         if (bgSprite) { bgSprite.width = DESIGN_W; bgSprite.height = DESIGN_H; }
+        if (startBg) { startBg.width = DESIGN_W; startBg.height = DESIGN_H; }
 
         var sa = getSafeInsets();
         var padTop = sa.top + 8, padBottom = sa.bottom + 8;
@@ -1882,6 +1922,7 @@
 
         loadAssets(function (assets) {
           createBackground(assets.background);
+          createStartBg();
           createFrame(assets.frame);
           createTinMan(assets.tinman, assets.nuts);
           SPARKLE_TEX = assets.sparkles;
