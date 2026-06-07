@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Wizard of Oz — Free the Tin Man</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -90,10 +90,18 @@
       function pub(name) { return assetURL(name); }
       var BACKGROUND_URL = assetURL("background.webp");
       var FRAME_URL = assetURL("frame.webp");
-      var BOARD_URL = assetURL("match3sheet.webp");
+      // Match-3 board + gems lifted from the original WoZ Magic Match playable
+      // so the look/feel is identical. Board is the blue checkerboard tray;
+      // gems are red apple / yellow gold / green gem / blue heart / purple flower.
+      var BOARD_URL = assetURL("m3_board.png");
       var ICON_URLS = [
-        assetURL("gem_flower.webp"), assetURL("gem_bow.webp"),
-        assetURL("gem_gold.webp"), assetURL("gem_heart.webp")
+        assetURL("m3_red.png"), assetURL("m3_yellow.png"), assetURL("m3_green.png"),
+        assetURL("m3_blue.png"), assetURL("m3_purple.png")
+      ];
+      // Star-burst sparkle shown when a gem of each type clears (same index order)
+      var SPARKLE_URLS = [
+        assetURL("m3_sparkle_red.png"), assetURL("m3_sparkle_yellow.png"), assetURL("m3_sparkle_green.png"),
+        assetURL("m3_sparkle_blue.png"), assetURL("m3_sparkle_purple.png")
       ];
       var TINMAN_URLS = {
         chest: pub("tinman_chest.webp"),
@@ -107,15 +115,36 @@
       var LOGO_URL = pub("woz-logo.webp");
       var PLAY_URL = pub("play-now.webp");
       var HERO_URL = pub("tinman-hero.webp");
+      // Sounds lifted from the original WoZ Magic Match playable.
+      // bgm=BGM, swap=tap_click, match=match_sfx, pop=Bubble_Pop,
+      // bolt=Sparkle_transition, free/win=sparkle_game_finish.
       var AUDIO_URLS = {
-        bgm: pub("audio/bgm.mp3"), swap: pub("audio/swap.mp3"), match: pub("audio/match.mp3"),
-        bolt: pub("audio/bolt.mp3"), free: pub("audio/free.mp3"), win: pub("audio/win.mp3")
+        bgm: pub("audio/m3_bgm.mp3"), swap: pub("audio/m3_tap.mp3"), match: pub("audio/m3_match.mp3"),
+        pop: pub("audio/m3_pop.mp3"), bolt: pub("audio/m3_sparkle.mp3"),
+        free: pub("audio/m3_finish.mp3"), win: pub("audio/m3_finish.mp3")
       };
+
+      // Build a tiny silent WAV data URI (no big literal). Played as a looping
+      // <audio> element to flip iOS's audio session to the "playback" channel,
+      // so Web Audio stays audible even with the ring/silent switch ON.
+      function silentWavURL(ms) {
+        var sr = 8000, n = Math.max(1, Math.floor(sr * ms / 1000));
+        var buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+        function s(o, str) { for (var i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); }
+        s(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); s(8, "WAVE"); s(12, "fmt ");
+        v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);
+        v.setUint16(34, 16, true); s(36, "data"); v.setUint32(40, n * 2, true);
+        // sample bytes stay zero (silence)
+        var b = new Uint8Array(buf), bin = "";
+        for (var i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+        return "data:audio/wav;base64," + btoa(bin);
+      }
 
       // Tiny Web Audio manager (no external lib). Unlocks on first user gesture,
       // master mute, BGM loop + one-shot SFX.
       var WOZAudio = {
-        ctx: null, master: null, buffers: {}, muted: false, started: false, bgmOn: false,
+        ctx: null, master: null, buffers: {}, muted: false, started: false, bgmOn: false, sessEl: null,
         init: function () {
           var AC = window.AudioContext || window.webkitAudioContext;
           if (!AC) return;
@@ -140,11 +169,40 @@
               }).catch(function () {});
           });
         },
+        // Called from a real user gesture. Safe to call repeatedly — each call
+        // retries until the context is actually running (iOS may stay suspended
+        // until a source is started inside the gesture).
         unlock: function () {
-          if (!this.ctx || this.started) return;
+          if (!this.ctx) return;
+          var ctx = this.ctx, self = this;
+          if (ctx.state === "suspended" && ctx.resume) {
+            ctx.resume().then(function () { self.startBgm(); }).catch(function () {});
+          }
+          // iOS/older Safari: a *started* source within the gesture is what
+          // actually unlocks output — resume() alone isn't always enough.
+          try {
+            var b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource();
+            s.buffer = b; s.connect(ctx.destination); s.start(0);
+          } catch (e) {}
+          this.iosSession();
           this.started = true;
-          if (this.ctx.state === "suspended") this.ctx.resume();
           this.startBgm();
+        },
+        // iOS routes Web Audio through the "ambient" session (killed by the
+        // ring/silent switch) until a media element plays. A looping silent
+        // <audio> with playsinline flips it to "playback" so SFX/BGM are heard.
+        iosSession: function () {
+          try {
+            if (!this.sessEl) {
+              var a = document.createElement("audio");
+              a.setAttribute("playsinline", ""); a.playsInline = true;
+              a.loop = true; a.preload = "auto"; a.volume = 1;
+              a.src = silentWavURL(250);
+              this.sessEl = a;
+            }
+            var p = this.sessEl.play();
+            if (p && p.catch) p.catch(function () {});
+          } catch (e) {}
         },
         startBgm: function () {
           if (!this.ctx || this.bgmOn || !this.buffers.bgm) return;
@@ -190,10 +248,29 @@
 
       var allLayers = [bgLayer, frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer];
       stage.addChild.apply(stage, allLayers);
+      // The background fills the whole screen (under notch/home indicator);
+      // everything else (frame, board, title, CTA) is fit into the safe area.
+      var contentLayers = [frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer];
+
+      // Read iOS safe-area insets (notch / Dynamic Island / home indicator).
+      // Needs viewport-fit=cover on the <meta viewport>; 0 on devices without.
+      var safeProbe = document.createElement("div");
+      safeProbe.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;" +
+        "pointer-events:none;padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);" +
+        "padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);";
+      document.body.appendChild(safeProbe);
+      function getSafeInsets() {
+        var s = window.getComputedStyle(safeProbe);
+        return {
+          top: parseFloat(s.paddingTop) || 0, right: parseFloat(s.paddingRight) || 0,
+          bottom: parseFloat(s.paddingBottom) || 0, left: parseFloat(s.paddingLeft) || 0
+        };
+      }
 
       var bgSprite = null;
       var frameSprite = null;
       var titleText = null;
+      var SPARKLE_TEX = null;   // per-gem-type star-burst textures (set on load)
 
       // End screen
       var endTextures = null;   // { logo, play } kept for the win card
@@ -223,10 +300,11 @@
         // width = tray display width; height derives from the texture aspect.
         // grid = the checker partition in tray-texture pixels (native 1197×1314).
         board: {
-          x: DESIGN_W / 2, y: 1215, width: 578,
-          // holes = notch/cutout cells (edge-centers) that have no tray surface
-          grid: { x0: 43, y0: 20, x1: 1141, y1: 1254, cols: 7, rows: 8, holes: [[0, 3], [4, 0], [4, 6], [7, 3]] },
-          iconScale: 0.82
+          x: DESIGN_W / 2, y: 1205, width: 600,
+          // 7×7 checkerboard with the 4 corner cells cut (octagonal WoZ tray).
+          // grid box is in tray-texture pixels (native 599×599).
+          grid: { x0: 7, y0: 7, x1: 590, y1: 590, cols: 7, rows: 7, holes: [[0, 0], [0, 6], [6, 0], [6, 6]] },
+          iconScale: 0.92
         }
       };
 
@@ -240,8 +318,8 @@
       var TINMAN = {
         cx: DESIGN_W / 2, cy: 470, scale: 0.56,
         // Head sprite index shown at each freed-bolt count (0..4). Customizable.
-        // 0=terrified, 3=sad, 1=surprised/hopeful, 4=content, 5=overjoyed.
-        faceByFreed: [0, 3, 1, 4, 5],
+        // 0=terrified, 1=surprised/hopeful, 3=sad, 4=content, 5=overjoyed.
+        faceByFreed: [0, 1, 3, 4, 5],
         // Rig geometry. shoulder/hip offsets are fractions of torso display size.
         // Limb angles are radians from straight-down; mirrored for the right side.
         rig: {
@@ -249,7 +327,7 @@
           shoulderX: 0.40, shoulderY: -0.34,
           hipX: 0.24, hipY: 0.40,
           ledgeTexY: 1195,        // frame-texture row of the bottom rail's top = his standing surface
-          arm: { anchorY: 0.08, handFrac: 0.907, rest: 0.62, free: 0.34, stand: 0.16, tense: 0.020, loose: 0.13 },
+          arm: { anchorY: 0.08, handFrac: 0.907, rest: 0.95, free: 0.34, stand: 0.16, tense: 0.020, loose: 0.13 },
           leg: { anchorY: 0.06, handFrac: 0.92, boltFx: 0.56, rest: 0.20, free: 0.10, stand: 0.06, tense: 0.018, loose: 0.10, spriteScale: 0.20, artFlip: -1 }
         },
         // Bolts pin a limb end to the frame. `color` will drive match-color linking later.
@@ -268,7 +346,8 @@
       function loadAssets(cb) {
         var tin = [TINMAN_URLS.chest, TINMAN_URLS.arm, TINMAN_URLS.leg].concat(TINMAN_URLS.heads);
         var urls = [BACKGROUND_URL, FRAME_URL, BOARD_URL]
-          .concat(ICON_URLS).concat(tin).concat(NUT_URLS).concat([HAND_URL, LOGO_URL, PLAY_URL, HERO_URL]);
+          .concat(ICON_URLS).concat(tin).concat(NUT_URLS).concat([HAND_URL, LOGO_URL, PLAY_URL, HERO_URL])
+          .concat(SPARKLE_URLS);
         Promise.all(urls.map(function (u) { return PIXI.Assets.load(u); })).then(function (r) {
           var i = 0, take = function (n) { var out = []; for (var k = 0; k < n; k++) out.push(r[i++]); return out; };
           var background = r[i++], frame = r[i++], board = r[i++];
@@ -276,10 +355,11 @@
           var chest = r[i++], arm = r[i++], leg = r[i++], heads = take(TINMAN_URLS.heads.length);
           var nuts = take(NUT_URLS.length);
           var hand = r[i++], logo = r[i++], play = r[i++], hero = r[i++];
+          var sparkles = take(SPARKLE_URLS.length);
           cb({
             background: background, frame: frame, board: board, icons: icons,
             tinman: { chest: chest, arm: arm, leg: leg, heads: heads },
-            nuts: nuts, hand: hand, logo: logo, play: play, hero: hero
+            nuts: nuts, hand: hand, logo: logo, play: play, hero: hero, sparkles: sparkles
           });
         }).catch(function (err) {
           showError("Assets failed to load.", urls.join("\n") + "\n\n" + (err && err.message ? err.message : String(err)));
@@ -597,6 +677,29 @@
         app.ticker.add(step);
       }
 
+      // WoZ-style clear: a colored star-burst flashes where a gem pops.
+      function sparkleBurst(x, y, type) {
+        if (!SPARKLE_TEX) return;
+        var tex = SPARKLE_TEX[type % SPARKLE_TEX.length];
+        var sp = new PIXI.Sprite(tex);
+        sp.anchor.set(0.5);
+        sp.position.set(x, y);
+        sp.blendMode = PIXI.BLEND_MODES.ADD;
+        var base = (boardState.target * 1.5) / Math.max(tex.width, tex.height);
+        sp.rotation = (x * 0.013 + y * 0.017) % (Math.PI * 2); // varied, deterministic
+        boardLayer.addChild(sp);
+        var t = 0;
+        function step() {
+          t += app.ticker.deltaMS;
+          var k = Math.min(1, t / 320);
+          sp.scale.set(base * (0.4 + 1.1 * k));
+          sp.alpha = 1 - k * k;
+          sp.rotation += app.ticker.deltaMS / 1000 * 1.4;
+          if (k >= 1) { app.ticker.remove(step); if (sp.parent) sp.parent.removeChild(sp); }
+        }
+        app.ticker.add(step);
+      }
+
       function applyGravityAndRefill(onDone) {
         var cells = boardState.cells, pending = 0, sealed = false, types = boardState.iconTextures.length;
         function track() { pending++; return function () { pending--; if (sealed && pending === 0) onDone(); }; }
@@ -647,9 +750,15 @@
         // so a freak chain of existing-gem alignments can't run away.
         if (matched.length === 0 || depth >= 6) { onDone(); return; }
         WOZAudio.play("match", 0.85);
+        WOZAudio.play("pop", 0.6);
         matched.forEach(function (key) {
           var p = key.split(","), r = +p[0], c = +p[1], cell = boardState.cells[r][c];
-          if (cell) { popGem(cell.sprite); boardState.cells[r][c] = null; }
+          if (cell) {
+            var ctr = boardState.center[r][c];
+            sparkleBurst(ctr.x, ctr.y, cell.type);
+            popGem(cell.sprite);
+            boardState.cells[r][c] = null;
+          }
         });
         setTimeout(function () {
           applyGravityAndRefill(function () { resolveBoard(onDone, depth + 1); });
@@ -1036,10 +1145,11 @@
 
         var heroCx = DESIGN_W / 2, heroCy = 770;
 
-        // full-screen dim
+        // full-screen dim (oversized so it covers beyond the fit-scaled design
+        // rect — i.e. the notch / home-indicator bands too)
         var veil = new PIXI.Graphics();
         veil.beginFill(0x140820, 0.86);
-        veil.drawRect(0, 0, DESIGN_W, DESIGN_H);
+        veil.drawRect(-DESIGN_W, -DESIGN_H, DESIGN_W * 3, DESIGN_H * 3);
         veil.endFill();
         veil.alpha = 0;
         veil.eventMode = "static";
@@ -1201,22 +1311,28 @@
         var vw = app.screen.width;
         var vh = app.screen.height;
 
-        // Scale design canvas to cover viewport (AppLovin-style)
-        var scale = Math.max(vw / DESIGN_W, vh / DESIGN_H);
-        var offsetX = (vw - DESIGN_W * scale) / 2;
-        var offsetY = (vh - DESIGN_H * scale) / 2;
+        // Background COVERS the whole viewport (so it bleeds under the notch and
+        // home indicator with no black bars).
+        var coverScale = Math.max(vw / DESIGN_W, vh / DESIGN_H);
+        bgLayer.scale.set(coverScale);
+        bgLayer.position.set((vw - DESIGN_W * coverScale) / 2, (vh - DESIGN_H * coverScale) / 2);
+        if (bgSprite) { bgSprite.width = DESIGN_W; bgSprite.height = DESIGN_H; }
 
-        // Uniform design-space transform: every layer shares the same
-        // scale/offset, so children are positioned in 941×1672 coordinates.
-        allLayers.forEach(function (layer) {
+        // Content FITS inside the safe area: the full design height (title →
+        // bottom CTA) is guaranteed visible between the notch and the home
+        // indicator on tall phones (iPhone mini/Air etc.). A few px of margin
+        // keeps UI off the system chrome. Never upscale past cover.
+        var sa = getSafeInsets();
+        var padTop = sa.top + 8, padBottom = sa.bottom + 8;
+        var safeH = Math.max(1, vh - padTop - padBottom);
+        var scale = Math.min(coverScale, safeH / DESIGN_H);
+        var offsetX = (vw - DESIGN_W * scale) / 2;
+        var offsetY = padTop + (safeH - DESIGN_H * scale) / 2;
+
+        contentLayers.forEach(function (layer) {
           layer.scale.set(scale);
           layer.position.set(offsetX, offsetY);
         });
-
-        if (bgSprite) {
-          bgSprite.width = DESIGN_W;
-          bgSprite.height = DESIGN_H;
-        }
 
         if (titleText) {
           titleText.position.set(layout.title.x, layout.title.y);
@@ -1234,13 +1350,18 @@
         // Audio: init + load, unlock on first user gesture (autoplay is blocked)
         WOZAudio.init();
         WOZAudio.loadAll(AUDIO_URLS);
+        if (window.location.search.indexOf("qa") >= 0) window.__qaAudio = WOZAudio;
+        // Unlock on the first real gesture. iOS can need a couple of taps before
+        // the context reports "running", so keep the listeners until it does
+        // (capture phase, so PIXI's own pointer handling can't swallow them).
+        var unlockEvents = ["pointerdown", "touchstart", "touchend", "mousedown", "click"];
         function unlockOnce() {
           WOZAudio.unlock();
-          document.removeEventListener("pointerdown", unlockOnce);
-          document.removeEventListener("touchstart", unlockOnce);
+          if (WOZAudio.ctx && WOZAudio.ctx.state === "running") {
+            unlockEvents.forEach(function (ev) { document.removeEventListener(ev, unlockOnce, true); });
+          }
         }
-        document.addEventListener("pointerdown", unlockOnce);
-        document.addEventListener("touchstart", unlockOnce);
+        unlockEvents.forEach(function (ev) { document.addEventListener(ev, unlockOnce, true); });
 
         // Stage-level pointer handling drives swipe detection
         stage.eventMode = "static";
@@ -1253,6 +1374,7 @@
           createBackground(assets.background);
           createFrame(assets.frame);
           createTinMan(assets.tinman, assets.nuts);
+          SPARKLE_TEX = assets.sparkles;
           createBoard(assets.board, assets.icons);
           createHand(assets.hand);
           createLogo(assets.logo);

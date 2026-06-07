@@ -8,15 +8,20 @@ PUB = os.path.join(ROOT, "public")
 
 # Assets the playable loads (keys = path the code passes to assetURL/pub)
 ASSETS = [
-    "background.webp", "frame.webp", "match3sheet.webp",
-    "gem_flower.webp", "gem_bow.webp", "gem_gold.webp", "gem_heart.webp",
+    "background.webp", "frame.webp",
+    # Match-3 board + gems + clear sparkles (from the original WoZ Magic Match)
+    "m3_board.png",
+    "m3_red.png", "m3_yellow.png", "m3_green.png", "m3_blue.png", "m3_purple.png",
+    "m3_sparkle_red.png", "m3_sparkle_yellow.png", "m3_sparkle_green.png",
+    "m3_sparkle_blue.png", "m3_sparkle_purple.png",
     "tinman_chest.webp", "tinman_arm.webp", "tinman_leg.webp",
     "tinman_head_0.webp", "tinman_head_1.webp", "tinman_head_2.webp",
     "tinman_head_3.webp", "tinman_head_4.webp", "tinman_head_5.webp",
     "nut_red.webp", "nut_blue.webp", "nut_gold.webp", "hand.webp",
     "woz-logo.webp", "play-now.webp", "tinman-hero.webp",
-    "audio/bgm.mp3", "audio/swap.mp3", "audio/match.mp3",
-    "audio/bolt.mp3", "audio/free.mp3", "audio/win.mp3",
+    # Match-3 sounds (from the original WoZ Magic Match)
+    "audio/m3_bgm.mp3", "audio/m3_tap.mp3", "audio/m3_match.mp3",
+    "audio/m3_pop.mp3", "audio/m3_sparkle.mp3", "audio/m3_finish.mp3",
 ]
 MIME = {".webp": "image/webp", ".png": "image/png", ".mp3": "audio/mpeg"}
 
