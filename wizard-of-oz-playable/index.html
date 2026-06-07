@@ -1527,46 +1527,81 @@
         });
       }
 
+      // Dark engraved serif for use ON the gold button (brown text, light gold
+      // emboss) — reads like the lettering pressed into the in-game Play Now ribbon.
+      function buttonTextStyle(size, wrapW) {
+        return new PIXI.TextStyle({
+          fontFamily: "Georgia, 'Times New Roman', serif",
+          fontSize: size,
+          fontWeight: "bold",
+          fill: "#5a2c00",
+          stroke: "#ffe9a8",
+          strokeThickness: 3,
+          lineJoin: "round",
+          dropShadow: true,
+          dropShadowColor: "#fff2c4",
+          dropShadowAlpha: 0.55,
+          dropShadowBlur: 0,
+          dropShadowAngle: Math.PI / 2,
+          dropShadowDistance: 1.5,
+          align: "center",
+          wordWrap: !!wrapW,
+          wordWrapWidth: wrapW || 100
+        });
+      }
+
       function createTitle() {
-        titleText = new PIXI.Text("Save the Tin Man!", goldTextStyle(52, DESIGN_W - 80));
+        titleText = new PIXI.Text("Save the Tin Man!", goldTextStyle(66, DESIGN_W - 80));
         titleText.anchor.set(0.5);
         uiLayer.addChild(titleText);
       }
 
       // ---- Tap-to-play start screen ----
       // Built from the live scene: the in-game "Save the Tin Man!" title sits on
-      // top, the Tin Man hangs in his frame, and a single gilded "Tap to Play!"
-      // plaque sits below him, with the logo beneath. One tap unlocks audio + BGM
-      // and reveals the game. Lives in uiLayer, so it inherits portrait/wide scaling.
+      // top, the Tin Man hangs in his frame, and the real in-game "Play Now" ribbon
+      // sits below him as the tap target — with the tutorial hand tapping it — and
+      // the logo beneath. One tap unlocks audio + BGM and reveals the game. Lives in
+      // uiLayer, so it inherits portrait/wide scaling.
       var startPrompt = null;
-      function createStartScreen() {
+      function createStartScreen(playTex, handTex) {
         var c = new PIXI.Container();
         c.position.set(DESIGN_W / 2, layout.board.y);
 
-        var W = PLAQUE_W, H = PLAQUE_H, R = 26;
-        var plaque = new PIXI.Graphics();
-        plaque.beginFill(0x2a1607, 0.9);
-        plaque.lineStyle({ width: 6, color: 0xFFC23C, alpha: 0.95 });
-        plaque.drawRoundedRect(-W / 2, -H / 2, W, H, R);
-        plaque.endFill();
-        plaque.lineStyle({ width: 2, color: 0xFFE9A8, alpha: 0.5 });   // gilded inner bevel
-        plaque.drawRoundedRect(-W / 2 + 10, -H / 2 + 10, W - 20, H - 20, R - 8);
-        c.addChild(plaque);
+        var btnW = 580;                                   // design-space button width
+        var btn = new PIXI.Sprite(playTex);
+        btn.anchor.set(0.5);
+        btn.scale.set(btnW / playTex.width);
+        c.addChild(btn);
+        var btnH = btn.height;
+        c.dW = btnW; c.dH = btnH * 1.32;                  // bounds incl. the tapping hand
 
-        var t = new PIXI.Text("▶  Tap to Play!", goldTextStyle(46, W - 56));
-        t.anchor.set(0.5); t.position.set(0, 0); t.resolution = 3;
-        c.addChild(t);
+        // Tutorial hand tapping the ribbon (fingertip on the button face).
+        var hand = new PIXI.Sprite(handTex);
+        hand.anchor.set(0.08, 0.04);                      // fingertip
+        var hs = (btnW * 0.40) / handTex.width;
+        hand.baseScale = hs; hand.scale.set(hs);
+        var hx = btnW * 0.12, hy = btnH * 0.12;           // rest position (fingertip near centre)
+        hand.position.set(hx, hy);
+        c.addChild(hand);
 
         uiLayer.addChild(c);
         startPrompt = c;
 
-        // gentle invite pulse, layered on top of the layout-driven base scale so
-        // portrait (base 1) and wide (base fit-to-column) both pulse correctly
+        // Smooth, continuous tap loop. press = sin²(phase·π) is a single hump that
+        // starts and ends at zero velocity, so there's no snap at the loop seam and
+        // no dead "rest" frame — the hand glides down and lifts in one fluid motion,
+        // the ribbon dipping with it. (No separate breathing pulse, which read jittery.)
         c.baseScale = 1;
-        var t = 0;
+        var btnBase = btnW / playTex.width;
+        var t = 0, T = 1.25;
         c.__pulse = function () {
           t += app.ticker.deltaMS / 1000;
-          c.scale.set(c.baseScale * (1 + 0.028 * Math.sin(t * 3.0)));
+          c.scale.set(c.baseScale);                                // apply layout scale only
+          var ph = (t % T) / T;
+          var press = Math.pow(Math.sin(ph * Math.PI), 2);         // smooth 0→1→0, zero slope at ends
+          hand.scale.set(hand.baseScale * (1 - 0.11 * press));
+          hand.position.set(hx - 5 * press, hy + 17 * press);
+          btn.scale.set(btnBase * (1 - 0.025 * press));
         };
         app.ticker.add(c.__pulse);
       }
@@ -1585,10 +1620,11 @@
           var p = startPrompt; startPrompt = null;
           if (p.__pulse) app.ticker.remove(p.__pulse);
           var f = 0;
+          var base = p.baseScale || 1;
           var fade = function () {
             f += app.ticker.deltaMS / 200;          // ~200ms fade
             p.alpha = Math.max(0, 1 - f);
-            p.scale.set(1 + 0.06 * f);               // slight zoom-out as it leaves
+            p.scale.set(base * (1 + 0.06 * f));      // slight zoom-out as it leaves
             if (f >= 1) { app.ticker.remove(fade); if (p.parent) p.parent.removeChild(p); }
           };
           app.ticker.add(fade);
@@ -1738,7 +1774,7 @@
             startPrompt.position.set(DESIGN_W / 2, frameBottom + band * 0.32);
           }
           if (bottomLogo) {
-            var lw = 232;   // stands alone, so a touch larger than the in-game 144
+            var lw = 360;   // stands alone, so noticeably larger than the in-game 144
             bottomLogo.baseScale = lw / bottomLogo.texture.width;
             bottomLogo.scale.set(bottomLogo.baseScale);
             bottomLogo.position.set(DESIGN_W / 2, frameBottom + band * 0.78);
@@ -1770,8 +1806,9 @@
         }
         var logoFit = bottomLogo ? Math.min((colW * 0.74) / bottomLogo.texture.width, (colH * 0.26) / bottomLogo.texture.height) : 0;
         var logoH = bottomLogo ? bottomLogo.texture.height * logoFit : 0;   // screen px
-        var plaqueFit = Math.min((colW * 0.96) / PLAQUE_W, (colH * 0.26) / PLAQUE_H);
-        var plaqueH = PLAQUE_H * plaqueFit;                                  // screen px
+        var pdW = startPrompt.dW || PLAQUE_W, pdH = startPrompt.dH || PLAQUE_H;
+        var plaqueFit = Math.min((colW * 0.96) / pdW, (colH * 0.26) / pdH);
+        var plaqueH = pdH * plaqueFit;                                       // screen px
 
         var gap = Math.max(20, colH * 0.07);
         var stackH = titleH + gap + logoH + gap + plaqueH;
@@ -1854,7 +1891,7 @@
           createCta(assets.play);
           endTextures = { logo: assets.logo, play: assets.play, hero: assets.hero };
           createTitle();
-          createStartScreen();
+          createStartScreen(assets.play, assets.hand);
 
           // Start-screen state: hold gameplay behind the tap. Keep the Tin Man,
           // frame, background, "Save the Tin Man!" title and logo visible; hide the
