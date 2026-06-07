@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Wizard of Oz — Free the Tin Man</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1a0a2e;
+      touch-action: none;
+    }
+    #game {
+      width: 100%;
+      height: 100%;
+    }
+    #error {
+      display: none;
+      position: fixed;
+      inset: 0;
+      padding: 24px;
+      background: #1a0a2e;
+      color: #fff;
+      font: 16px/1.5 system-ui, sans-serif;
+      z-index: 10;
+      overflow: auto;
+    }
+    #error code {
+      display: block;
+      margin-top: 12px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="error"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
+  <script>
+    (function () {
+      "use strict";
+
+      var errorEl = document.getElementById("error");
+
+      function showError(message, detail) {
+        errorEl.style.display = "block";
+        errorEl.innerHTML = "<strong>Playable failed to load</strong><p>" + message + "</p>" +
+          (detail ? "<code>" + detail + "</code>" : "");
+      }
+
+      if (typeof PIXI === "undefined") {
+        showError("PIXI.js did not load. Check your internet connection.", "");
+        return;
+      }
+
+      if (window.location.protocol === "file:") {
+        showError(
+          "Open this via a local server, not by double-clicking the file.",
+          "cd /Users/ayushsingh/Documents/programming/zynga-playables\npython3 -m http.server 8765\n\nThen open:\nhttp://localhost:8765/wizard-of-oz-playable/index.html"
+        );
+        return;
+      }
+
+      // MRAID stub for local dev; replaced by ad SDK in production
+      if (typeof mraid === "undefined") {
+        window.mraid = {
+          getState: function () { return "default"; },
+          addEventListener: function (event, cb) {
+            if (event === "ready") setTimeout(cb, 0);
+          },
+          open: function (url) { window.open(url, "_blank"); }
+        };
+      }
+
+      var DESIGN_W = 941;
+      var DESIGN_H = 1672;
+      var BACKGROUND_URL = new URL("../public/background.webp", window.location.href).href;
+      var FRAME_URL = new URL("../public/frame.webp", window.location.href).href;
+      var BOARD_URL = new URL("../public/match3sheet.webp", window.location.href).href;
+      var ICON_URLS = [
+        new URL("../public/gem_flower.webp", window.location.href).href,
+        new URL("../public/gem_bow.webp", window.location.href).href,
+        new URL("../public/gem_gold.webp", window.location.href).href,
+        new URL("../public/gem_heart.webp", window.location.href).href
+      ];
+      function pub(name) { return new URL("../public/" + name, window.location.href).href; }
+      var TINMAN_URLS = {
+        chest: pub("tinman_chest.webp"),
+        arm: pub("tinman_arm.webp"),
+        leg: pub("tinman_leg.webp"),
+        heads: [0, 1, 2, 3, 4, 5].map(function (i) { return pub("tinman_head_" + i + ".webp"); })
+      };
+      // nut textures indexed by color: 0=red, 1=blue, 2=gold (matches BOLT_COLORS)
+      var NUT_URLS = [pub("nut_red.webp"), pub("nut_blue.webp"), pub("nut_gold.webp")];
+      var HAND_URL = pub("hand.webp");
+      var LOGO_URL = pub("woz-logo.webp");
+      var PLAY_URL = pub("play-now.webp");
+      var HERO_URL = pub("tinman-hero.webp");
+      var AUDIO_URLS = {
+        bgm: pub("audio/bgm.mp3"), swap: pub("audio/swap.mp3"), match: pub("audio/match.mp3"),
+        bolt: pub("audio/bolt.mp3"), free: pub("audio/free.mp3"), win: pub("audio/win.mp3")
+      };
+
+      // Tiny Web Audio manager (no external lib). Unlocks on first user gesture,
+      // master mute, BGM loop + one-shot SFX.
+      var WOZAudio = {
+        ctx: null, master: null, buffers: {}, muted: false, started: false, bgmOn: false,
+        init: function () {
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return;
+          try {
+            this.ctx = new AC();
+            this.master = this.ctx.createGain();
+            this.master.gain.value = 1;
+            this.master.connect(this.ctx.destination);
+          } catch (e) { this.ctx = null; }
+        },
+        loadAll: function (map) {
+          if (!this.ctx) return;
+          var self = this;
+          Object.keys(map).forEach(function (name) {
+            fetch(map[name]).then(function (r) { return r.arrayBuffer(); })
+              .then(function (b) {
+                return new Promise(function (res, rej) { self.ctx.decodeAudioData(b, res, rej); });
+              })
+              .then(function (buf) {
+                self.buffers[name] = buf;
+                if (name === "bgm" && self.started) self.startBgm();
+              }).catch(function () {});
+          });
+        },
+        unlock: function () {
+          if (!this.ctx || this.started) return;
+          this.started = true;
+          if (this.ctx.state === "suspended") this.ctx.resume();
+          this.startBgm();
+        },
+        startBgm: function () {
+          if (!this.ctx || this.bgmOn || !this.buffers.bgm) return;
+          var s = this.ctx.createBufferSource();
+          s.buffer = this.buffers.bgm; s.loop = true;
+          var g = this.ctx.createGain(); g.gain.value = 0.3;
+          s.connect(g); g.connect(this.master); s.start(0);
+          this.bgmOn = true;
+        },
+        play: function (name, vol) {
+          if (!this.ctx || this.muted || !this.buffers[name]) return;
+          if (this.ctx.state === "suspended") this.ctx.resume();
+          var s = this.ctx.createBufferSource(); s.buffer = this.buffers[name];
+          var g = this.ctx.createGain(); g.gain.value = (vol == null ? 1 : vol);
+          s.connect(g); g.connect(this.master); s.start(0);
+        },
+        toggleMute: function () { this.setMuted(!this.muted); return this.muted; },
+        setMuted: function (m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 1; }
+      };
+      // Store URL (the ad network may still override at serve time)
+      var CTA_URL = "https://play.google.com/store/apps/details?id=com.zynga.ozmatch&hl=en";
+
+      var app = new PIXI.Application({
+        resizeTo: window,
+        backgroundColor: 0x1a0a2e,
+        antialias: true,
+        resolution: Math.min(window.devicePixelRatio || 1, 2),
+        autoDensity: true
+      });
+      document.getElementById("game").appendChild(app.view);
+
+      var stage = app.stage;
+
+      // Layer containers (bottom → top)
+      // bg → frame (wooden board) → tinMan (bolted ON the frame, full body)
+      // → board (match-3) → tutorial → ui
+      var bgLayer = new PIXI.Container();
+      var frameLayer = new PIXI.Container();
+      var tinManLayer = new PIXI.Container();
+      var boardLayer = new PIXI.Container();
+      var tutorialLayer = new PIXI.Container();
+      var uiLayer = new PIXI.Container();
+
+      var allLayers = [bgLayer, frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer];
+      stage.addChild.apply(stage, allLayers);
+
+      var bgSprite = null;
+      var frameSprite = null;
+      var titleText = null;
+
+      // End screen
+      var endTextures = null;   // { logo, play } kept for the win card
+      var endShown = false;
+      var bottomLogo = null, bottomCta = null;
+      var confetti = [];
+
+      // Match-3 board runtime state
+      // cells[r][c] = { sprite, type } or null (hole/empty)
+      // center[r][c] = { x, y } design-space cell center
+      var boardState = { cols: 0, rows: 0, cells: [], center: [], cellW: 0 };
+      var dragStart = null;   // { row, col, gx, gy } pointer-down on a gem
+      var swapping = false;   // input lock while a swap animates
+
+      // Layout anchors (design-space pixels, 941×1672)
+      // Frame is the wooden stage across the top; its transparent window
+      // (native x≈200–990, y≈232–788) is where the Tin Man shows through.
+      var layout = {
+        title: { x: DESIGN_W / 2, y: 80 },
+        // Bottom bar (anchored-center): logo bottom-left, Play-Now bottom-right,
+        // equal side margins for symmetry. Inset from edges for tall-phone safety.
+        logo: { cx: 170, cy: 1600, width: 144 },
+        cta: { cx: 660, cy: 1600, width: 344 },
+        // Compact top banner, centered (not full width)
+        frame: { topY: 105, width: 710 },
+        // Hero match-3 board: tray sprite + icons placed on its 7×8 grid.
+        // width = tray display width; height derives from the texture aspect.
+        // grid = the checker partition in tray-texture pixels (native 1197×1314).
+        board: {
+          x: DESIGN_W / 2, y: 1215, width: 578,
+          // holes = notch/cutout cells (edge-centers) that have no tray surface
+          grid: { x0: 43, y0: 20, x1: 1141, y1: 1254, cols: 7, rows: 8, holes: [[0, 3], [4, 0], [4, 6], [7, 3]] },
+          iconScale: 0.82
+        }
+      };
+
+      // ---- Tin Man rig (data-driven, placeholder art) ----
+      // All geometry is in design px relative to the torso anchor (cx, cy).
+      // Limbs are drawn along +x from their joint and rotated to `rest`.
+      // `free` = relaxed angle the limb eases to once its bolt pops.
+      // Bolt colors hint the future match-color linkage (red/blue/yellow).
+      // Solid nut colors, matched exactly to the gems: red flower / blue bow / yellow gold
+      var BOLT_COLORS = [0xEF1205, 0x0BA2FD, 0xFDD703];
+      var TINMAN = {
+        cx: DESIGN_W / 2, cy: 470, scale: 0.56,
+        // Head sprite index shown at each freed-bolt count (0..4). Customizable.
+        // 0=terrified, 3=sad, 1=surprised/hopeful, 4=content, 5=overjoyed.
+        faceByFreed: [0, 3, 1, 4, 5],
+        // Rig geometry. shoulder/hip offsets are fractions of torso display size.
+        // Limb angles are radians from straight-down; mirrored for the right side.
+        rig: {
+          headNeck: 0.90, headY: -0.42,
+          shoulderX: 0.40, shoulderY: -0.34,
+          hipX: 0.24, hipY: 0.40,
+          ledgeTexY: 1195,        // frame-texture row of the bottom rail's top = his standing surface
+          arm: { anchorY: 0.08, handFrac: 0.907, rest: 0.62, free: 0.34, stand: 0.16, tense: 0.020, loose: 0.13 },
+          leg: { anchorY: 0.06, handFrac: 0.92, boltFx: 0.56, rest: 0.20, free: 0.10, stand: 0.06, tense: 0.018, loose: 0.10, spriteScale: 0.20, artFlip: -1 }
+        },
+        // Bolts pin a limb end to the frame. `color` will drive match-color linking later.
+        boltDefs: [
+          { id: "wristL", limb: "armL", color: 0 },
+          { id: "wristR", limb: "armR", color: 1 },
+          { id: "ankleL", limb: "legL", color: 2 },
+          { id: "ankleR", limb: "legR", color: 0 }
+        ],
+        boltSize: 56,           // displayed bolt diameter in design px (vs the Tin Man)
+        parts: {}, bolts: [], headSprite: null, headTex: null,
+        root: null, baseY: 0, time: 0, freedCount: 0, total: 4,
+        standing: false, falling: false, fallV: 0, standRootY: 0, torsoH: 0
+      };
+
+      function loadAssets(cb) {
+        var tin = [TINMAN_URLS.chest, TINMAN_URLS.arm, TINMAN_URLS.leg].concat(TINMAN_URLS.heads);
+        var urls = [BACKGROUND_URL, FRAME_URL, BOARD_URL]
+          .concat(ICON_URLS).concat(tin).concat(NUT_URLS).concat([HAND_URL, LOGO_URL, PLAY_URL, HERO_URL]);
+        Promise.all(urls.map(function (u) { return PIXI.Assets.load(u); })).then(function (r) {
+          var i = 0, take = function (n) { var out = []; for (var k = 0; k < n; k++) out.push(r[i++]); return out; };
+          var background = r[i++], frame = r[i++], board = r[i++];
+          var icons = take(ICON_URLS.length);
+          var chest = r[i++], arm = r[i++], leg = r[i++], heads = take(TINMAN_URLS.heads.length);
+          var nuts = take(NUT_URLS.length);
+          var hand = r[i++], logo = r[i++], play = r[i++], hero = r[i++];
+          cb({
+            background: background, frame: frame, board: board, icons: icons,
+            tinman: { chest: chest, arm: arm, leg: leg, heads: heads },
+            nuts: nuts, hand: hand, logo: logo, play: play, hero: hero
+          });
+        }).catch(function (err) {
+          showError("Assets failed to load.", urls.join("\n") + "\n\n" + (err && err.message ? err.message : String(err)));
+        });
+      }
+
+      function createFrame(texture) {
+        // Full-width wooden stage anchored to the top of the canvas, laid
+        // over the background. The transparent window reveals the scene.
+        frameSprite = new PIXI.Sprite(texture);
+        frameSprite.anchor.set(0.5, 0); // top-center
+
+        var fitScale = layout.frame.width / texture.width;
+        frameSprite.scale.set(fitScale);
+        frameSprite.position.set(DESIGN_W / 2, layout.frame.topY);
+
+        frameLayer.addChild(frameSprite);
+      }
+
+      // Match-3 board: tray sprite + one icon per cell of its 7×8 grid
+      function createBoard(texture, iconTextures) {
+        var b = layout.board;
+        var g = b.grid;
+        var trayW = b.width;
+        var trayH = trayW * (texture.height / texture.width);
+
+        var tray = new PIXI.Sprite(texture);
+        tray.anchor.set(0.5);
+        tray.width = trayW;
+        tray.height = trayH;
+        tray.position.set(b.x, b.y);
+        boardLayer.addChild(tray);
+
+        // Map tray-texture pixels → design space (tray is drawn at trayW×trayH,
+        // centered at b.x,b.y). texture native is texture.width × texture.height.
+        var sx = trayW / texture.width;
+        var sy = trayH / texture.height;
+        var originX = b.x - trayW / 2;
+        var originY = b.y - trayH / 2;
+        function texToDesignX(tx) { return originX + tx * sx; }
+        function texToDesignY(ty) { return originY + ty * sy; }
+
+        var cellW = (g.x1 - g.x0) / g.cols;
+        var cellH = (g.y1 - g.y0) / g.rows;
+        var cellDesignW = cellW * sx;
+        var cellDesignH = cellH * sy;
+        var target = Math.min(cellDesignW, cellDesignH) * b.iconScale;
+
+        // Deterministic, well-mixed icon type per cell (hash → type index)
+        function pickType(row, col) {
+          var h = (row * 928371 + col * 1299721 + row * col * 131) >>> 0;
+          h = (h ^ (h >>> 5) ^ (h >>> 11)) >>> 0;
+          return h % iconTextures.length;
+        }
+
+        var holes = g.holes || [];
+        function isHole(row, col) {
+          for (var i = 0; i < holes.length; i++) {
+            if (holes[i][0] === row && holes[i][1] === col) return true;
+          }
+          return false;
+        }
+
+        // QA-only hooks for automated testing (no effect in production)
+        if (window.location.search.indexOf("qa") >= 0) {
+          window.__qaBoard = boardState;
+          window.__qaHint = function () { return findHintMove(); };
+          window.__qaSwap = function (f, t) { return trySwap(f, t); };
+          window.__qaMatches = function () { return findMatches().length; };
+          window.__qaBusy = function () { return swapping; };
+        }
+
+        boardState.cols = g.cols;
+        boardState.rows = g.rows;
+        boardState.cellW = cellDesignW;
+        boardState.cells = [];
+        boardState.center = [];
+        boardState.iconTextures = iconTextures;
+        boardState.target = target;
+
+        for (var row = 0; row < g.rows; row++) {
+          boardState.cells[row] = [];
+          boardState.center[row] = [];
+          for (var col = 0; col < g.cols; col++) {
+            var dx = texToDesignX(g.x0 + (col + 0.5) * cellW);
+            var dy = texToDesignY(g.y0 + (row + 0.5) * cellH);
+            boardState.center[row][col] = { x: dx, y: dy };
+
+            if (isHole(row, col)) {
+              boardState.cells[row][col] = null;
+              continue;
+            }
+
+            var type = pickType(row, col);
+            var icon = makeGemSprite(type);
+            icon.gemRow = row;
+            icon.gemCol = col;
+            icon.position.set(dx, dy);
+            boardLayer.addChild(icon);
+            boardState.cells[row][col] = { sprite: icon, type: type };
+          }
+        }
+
+        // Match-3 state
+        boardState.holes = holes;
+        boardState.won = false;
+        boardState.playerMoves = 0;
+        boardState.maxMoves = 4;
+
+        // Per-column vertical segments split by holes (holes act as barriers)
+        boardState.segments = [];
+        for (var c = 0; c < g.cols; c++) {
+          var segs = [], st = null;
+          for (var r = 0; r < g.rows; r++) {
+            var h = isHole(r, c);
+            if (!h && st === null) st = r;
+            if ((h || r === g.rows - 1) && st !== null) { segs.push([st, h ? r - 1 : r]); st = null; }
+          }
+          boardState.segments[c] = segs;
+        }
+
+        sanitizeBoard();              // remove any accidental starting matches
+        setTimeout(showHintForCurrent, 700);
+      }
+
+      // Create an interactive gem sprite of the given type
+      function makeGemSprite(type) {
+        var icon = new PIXI.Sprite(boardState.iconTextures[type]);
+        icon.anchor.set(0.5);
+        var s = boardState.target / Math.max(icon.texture.width, icon.texture.height);
+        icon.baseScale = s;
+        icon.scale.set(s);
+        icon.eventMode = "static";
+        icon.cursor = "pointer";
+        icon.on("pointerdown", onGemDown);
+        return icon;
+      }
+
+      // ---- Swipe-to-swap interaction ----
+
+      // Simple easeInOutQuad tween of a sprite's position via the ticker
+      function tweenTo(sprite, x, y, duration, onComplete) {
+        var sx = sprite.x, sy = sprite.y, elapsed = 0;
+        function step() {
+          elapsed += app.ticker.deltaMS;
+          var k = Math.min(1, elapsed / duration);
+          var e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+          sprite.x = sx + (x - sx) * e;
+          sprite.y = sy + (y - sy) * e;
+          if (k >= 1) {
+            app.ticker.remove(step);
+            if (onComplete) onComplete();
+          }
+        }
+        app.ticker.add(step);
+      }
+
+      function onGemDown(e) {
+        if (swapping) return;
+        var s = e.currentTarget;
+        dragStart = { row: s.gemRow, col: s.gemCol, gx: e.global.x, gy: e.global.y };
+      }
+
+      function onPointerMove(e) {
+        if (!dragStart || swapping) return;
+        var dx = e.global.x - dragStart.gx;
+        var dy = e.global.y - dragStart.gy;
+        // Require a clear swipe of ~1/4 cell (in on-screen px) before committing
+        var threshold = boardLayer.scale.x * boardState.cellW * 0.25;
+        if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return;
+
+        var dr = 0, dc = 0;
+        if (Math.abs(dx) > Math.abs(dy)) { dc = dx > 0 ? 1 : -1; }
+        else { dr = dy > 0 ? 1 : -1; }
+
+        var from = { row: dragStart.row, col: dragStart.col };
+        var to = { row: dragStart.row + dr, col: dragStart.col + dc };
+        dragStart = null; // one swap per gesture
+        trySwap(from, to);
+      }
+
+      function onPointerUp() {
+        dragStart = null;
+      }
+
+      function inBounds(r, c) {
+        return r >= 0 && r < boardState.rows && c >= 0 && c < boardState.cols;
+      }
+
+      function swapModel(a, b) {
+        var t = boardState.cells[a.row][a.col];
+        boardState.cells[a.row][a.col] = boardState.cells[b.row][b.col];
+        boardState.cells[b.row][b.col] = t;
+      }
+
+      function trySwap(from, to) {
+        if (boardState.won || swapping) return;
+        if (!inBounds(to.row, to.col)) return;
+        var a = boardState.cells[from.row][from.col];
+        var b = boardState.cells[to.row][to.col];
+        if (!a || !b) return; // hole/empty — not swappable
+
+        swapping = true;
+        hideHint();
+        WOZAudio.play("swap", 0.7);
+        swapModel(from, to);
+        a.sprite.gemRow = to.row; a.sprite.gemCol = to.col;
+        b.sprite.gemRow = from.row; b.sprite.gemCol = from.col;
+
+        var pA = boardState.center[to.row][to.col];
+        var pB = boardState.center[from.row][from.col];
+        var done = 0;
+        function afterSwap() {
+          if (++done < 2) return;
+          if (findMatches().length > 0) {
+            resolveBoard(function () { swapping = false; onPlayerMatch(); });
+          } else {
+            // no match → revert
+            swapModel(from, to);
+            a.sprite.gemRow = from.row; a.sprite.gemCol = from.col;
+            b.sprite.gemRow = to.row; b.sprite.gemCol = to.col;
+            var d2 = 0;
+            function back() { if (++d2 === 2) { swapping = false; showHintForCurrent(); } }
+            tweenTo(a.sprite, pB.x, pB.y, 150, back);
+            tweenTo(b.sprite, pA.x, pA.y, 150, back);
+          }
+        }
+        tweenTo(a.sprite, pA.x, pA.y, 150, afterSwap);
+        tweenTo(b.sprite, pB.x, pB.y, 150, afterSwap);
+      }
+
+      function onPlayerMatch() {
+        boardState.playerMoves++;
+        releaseNextBolt(); // each player match frees one bolt; 4th frees him
+        if (boardState.playerMoves >= boardState.maxMoves) {
+          boardState.won = true;
+          hideHint();
+        } else {
+          showHintForCurrent();
+        }
+      }
+
+      // ---- Match-3 core ----
+      function findMatches() {
+        var cells = boardState.cells, R = boardState.rows, C = boardState.cols, m = {};
+        function mark(r, c) { m[r + "," + c] = true; }
+        for (var r = 0; r < R; r++) {           // horizontal runs
+          var run = 1;
+          for (var c = 1; c <= C; c++) {
+            var cur = c < C ? cells[r][c] : null, prev = cells[r][c - 1];
+            if (cur && prev && cur.type === prev.type) { run++; }
+            else { if (run >= 3) for (var i = 1; i <= run; i++) mark(r, c - i); run = 1; }
+          }
+        }
+        for (var c2 = 0; c2 < C; c2++) {        // vertical runs
+          var run2 = 1;
+          for (var r2 = 1; r2 <= R; r2++) {
+            var cur2 = r2 < R ? cells[r2][c2] : null, prev2 = cells[r2 - 1][c2];
+            if (cur2 && prev2 && cur2.type === prev2.type) { run2++; }
+            else { if (run2 >= 3) for (var j = 1; j <= run2; j++) mark(r2 - j, c2); run2 = 1; }
+          }
+        }
+        return Object.keys(m);
+      }
+
+      function wouldMatch(a, b) {
+        swapModel(a, b);
+        var ok = findMatches().length > 0;
+        swapModel(a, b);
+        return ok;
+      }
+
+      function findHintMove() {
+        var cells = boardState.cells;
+        for (var r = 0; r < boardState.rows; r++) {
+          for (var c = 0; c < boardState.cols; c++) {
+            if (!cells[r][c]) continue;
+            if (inBounds(r, c + 1) && cells[r][c + 1] && wouldMatch({ row: r, col: c }, { row: r, col: c + 1 }))
+              return { from: { row: r, col: c }, to: { row: r, col: c + 1 } };
+            if (inBounds(r + 1, c) && cells[r + 1][c] && wouldMatch({ row: r, col: c }, { row: r + 1, col: c }))
+              return { from: { row: r, col: c }, to: { row: r + 1, col: c } };
+          }
+        }
+        return null;
+      }
+
+      // Single pass: ensure no cell equals the two equal cells preceding it
+      // (left or above) → guarantees zero starting 3-in-a-rows.
+      function sanitizeBoard() {
+        var cells = boardState.cells, types = boardState.iconTextures.length;
+        for (var r = 0; r < boardState.rows; r++) {
+          for (var c = 0; c < boardState.cols; c++) {
+            var cell = cells[r][c]; if (!cell) continue;
+            var bad = {};
+            if (c >= 2 && cells[r][c - 1] && cells[r][c - 2] && cells[r][c - 1].type === cells[r][c - 2].type) bad[cells[r][c - 1].type] = 1;
+            if (r >= 2 && cells[r - 1][c] && cells[r - 2][c] && cells[r - 1][c].type === cells[r - 2][c].type) bad[cells[r - 1][c].type] = 1;
+            if (bad[cell.type]) {
+              for (var t = 0; t < types; t++) {
+                if (!bad[t]) { cell.type = t; cell.sprite.texture = boardState.iconTextures[t]; break; }
+              }
+            }
+          }
+        }
+      }
+
+      function popGem(sprite) {
+        var base = sprite.scale.x, t = 0;
+        function step() {
+          t += app.ticker.deltaMS;
+          var k = Math.min(1, t / 220);
+          sprite.scale.set(base * (1 + 0.45 * Math.sin(k * Math.PI)));
+          sprite.alpha = 1 - k;
+          if (k >= 1) { app.ticker.remove(step); if (sprite.parent) sprite.parent.removeChild(sprite); }
+        }
+        app.ticker.add(step);
+      }
+
+      function applyGravityAndRefill(onDone) {
+        var cells = boardState.cells, pending = 0, sealed = false, types = boardState.iconTextures.length;
+        function track() { pending++; return function () { pending--; if (sealed && pending === 0) onDone(); }; }
+        for (var c = 0; c < boardState.cols; c++) {
+          var segs = boardState.segments[c];
+          for (var s = 0; s < segs.length; s++) {
+            var r0 = segs[s][0], r1 = segs[s][1];
+            var stack = [];
+            for (var r = r1; r >= r0; r--) if (cells[r][c]) stack.push(cells[r][c]);
+            var writeR = r1;
+            for (var i = 0; i < stack.length; i++) {       // settle existing gems to bottom
+              var cell = stack[i], ctr = boardState.center[writeR][c];
+              cells[writeR][c] = cell; cell.sprite.gemRow = writeR; cell.sprite.gemCol = c;
+              if (Math.abs(cell.sprite.y - ctr.y) > 0.5 || Math.abs(cell.sprite.x - ctr.x) > 0.5)
+                tweenTo(cell.sprite, ctr.x, ctr.y, 200, track());
+              writeR--;
+            }
+            var drop = 1;
+            for (var rr = writeR; rr >= r0; rr--) {         // spawn new gems falling from above
+              // Smart refill: pick a type that does NOT complete a match where it
+              // lands. Columns fill left→right and bottom→top, so the two cells to
+              // the left and the two below are already final — same invariant as
+              // the clean-start sanitizer. This stops endless random cascades.
+              var bad = {};
+              if (c >= 2 && cells[rr][c - 1] && cells[rr][c - 2] && cells[rr][c - 1].type === cells[rr][c - 2].type) bad[cells[rr][c - 1].type] = 1;
+              if (rr + 2 <= r1 && cells[rr + 1][c] && cells[rr + 2][c] && cells[rr + 1][c].type === cells[rr + 2][c].type) bad[cells[rr + 1][c].type] = 1;
+              var choices = [];
+              for (var ti = 0; ti < types; ti++) if (!bad[ti]) choices.push(ti);
+              var type = choices[Math.floor(Math.random() * choices.length)];
+              var ng = makeGemSprite(type); ng.gemRow = rr; ng.gemCol = c;
+              var ctr2 = boardState.center[rr][c];
+              ng.position.set(ctr2.x, boardState.center[r0][c].y - drop * boardState.cellW);
+              boardLayer.addChild(ng);
+              cells[rr][c] = { sprite: ng, type: type };
+              tweenTo(ng, ctr2.x, ctr2.y, 240, track());
+              drop++;
+            }
+          }
+        }
+        sealed = true;
+        if (pending === 0) onDone();
+      }
+
+      function resolveBoard(onDone, depth) {
+        depth = depth || 0;
+        var matched = findMatches();
+        // Safety cap: with smart refill this is almost always 1 round; bound it
+        // so a freak chain of existing-gem alignments can't run away.
+        if (matched.length === 0 || depth >= 6) { onDone(); return; }
+        WOZAudio.play("match", 0.85);
+        matched.forEach(function (key) {
+          var p = key.split(","), r = +p[0], c = +p[1], cell = boardState.cells[r][c];
+          if (cell) { popGem(cell.sprite); boardState.cells[r][c] = null; }
+        });
+        setTimeout(function () {
+          applyGravityAndRefill(function () { resolveBoard(onDone, depth + 1); });
+        }, 240);
+      }
+
+      // ---- Tutorial hand ----
+      var tutorialHand = null;
+      var hint = { active: false, from: null, to: null, t: 0 };
+
+      function createHand(texture) {
+        tutorialHand = new PIXI.Sprite(texture);
+        tutorialHand.anchor.set(0.08, 0.04); // fingertip
+        var s = (boardState.cellW * 1.5) / texture.width;
+        tutorialHand.scale.set(s);
+        tutorialHand.visible = false;
+        tutorialLayer.addChild(tutorialHand);
+        app.ticker.add(updateHand);
+      }
+
+      function showHintForCurrent() {
+        if (boardState.won) return;
+        showHint(findHintMove());
+      }
+
+      function showHint(move) {
+        if (!move || !tutorialHand) { hideHint(); return; }
+        hint.active = true; hint.from = move.from; hint.to = move.to; hint.t = 0;
+        tutorialHand.visible = true;
+      }
+
+      function hideHint() {
+        hint.active = false;
+        if (tutorialHand) tutorialHand.visible = false;
+      }
+
+      function updateHand() {
+        if (!hint.active || !tutorialHand) return;
+        hint.t += app.ticker.deltaMS / 1000;
+        var a = boardState.center[hint.from.row][hint.from.col];
+        var b = boardState.center[hint.to.row][hint.to.col];
+        var p = (hint.t % 1.5) / 1.5;            // 1.5s loop
+        var e = p < 0.65 ? p / 0.65 : 1;          // glide over first 65%
+        tutorialHand.position.set(a.x + (b.x - a.x) * e, a.y + (b.y - a.y) * e);
+        tutorialHand.alpha = p < 0.85 ? 1 : 1 - (p - 0.85) / 0.15; // fade out, then snap back
+      }
+
+      // ---- Tin Man: assembled from real sprite parts ----
+      function drawBolt(colorIndex) {
+        var g = new PIXI.Graphics();
+        var R = 22;
+        var col = BOLT_COLORS[colorIndex % BOLT_COLORS.length];
+        function hex(rad) {
+          var p = [];
+          for (var i = 0; i < 6; i++) {
+            var a = Math.PI / 6 + i * Math.PI / 3;
+            p.push(Math.cos(a) * rad, Math.sin(a) * rad);
+          }
+          return p;
+        }
+        // solid colored hex nut with a dark rim
+        g.lineStyle({ width: 3, color: 0x2a2a2a, alpha: 0.55 });
+        g.beginFill(col); g.drawPolygon(hex(R)); g.endFill();
+        // bevel: light ring then color face
+        g.lineStyle(0);
+        g.beginFill(0xffffff, 0.20); g.drawPolygon(hex(R * 0.74)); g.endFill();
+        g.beginFill(col, 1); g.drawPolygon(hex(R * 0.56)); g.endFill();
+        // cross (Phillips) slot
+        g.lineStyle({ width: 4, color: 0x000000, alpha: 0.40, cap: "round" });
+        g.moveTo(-R * 0.42, 0); g.lineTo(R * 0.42, 0);
+        g.moveTo(0, -R * 0.42); g.lineTo(0, R * 0.42);
+        return g;
+      }
+
+      function createTinMan(art, nuts) {
+        var T = TINMAN, S = T.scale, R = T.rig;
+        var root = new PIXI.Container();
+        root.position.set(T.cx, T.cy);
+        T.root = root; T.baseY = T.cy;
+        tinManLayer.addChild(root);
+
+        var torsoW = art.chest.width * S, torsoH = art.chest.height * S;
+        var shX = R.shoulderX * torsoW, shY = R.shoulderY * torsoH;
+        var hpX = R.hipX * torsoW, hpY = R.hipY * torsoH;
+        T.torsoH = torsoH;
+        // distance from torso anchor down to the bottom of the boots when standing
+        var legScale = R.leg.spriteScale || S;
+        T.footBottomLocal = R.hipY * torsoH + (1 - R.leg.anchorY) * art.leg.height * legScale * Math.cos(R.leg.stand);
+
+        // sign = +1 left side, -1 right side. cfg.spriteScale overrides the shared
+        // scale (the boot art is a different native size); cfg.artFlip flips the
+        // texture independent of the angle sign (so toes point outward both sides).
+        function addLimb(name, tex, cfg, joint, sign) {
+          var sp = new PIXI.Sprite(tex);
+          sp.anchor.set(0.5, cfg.anchorY);
+          var sc = cfg.spriteScale || S;
+          var flip = cfg.artFlip || 1;
+          sp.scale.set(sign * flip * sc, sc);
+          var rest = sign * cfg.rest, free = sign * cfg.free;
+          sp.rotation = rest;
+          sp.position.set(joint.x, joint.y);
+          root.addChild(sp);
+          // store the full transform so the bolt anchor (a texture-fraction
+          // point) maps to design space accounting for scale/flip/rotation
+          T.parts[name] = {
+            sp: sp, joint: joint, rest: rest, free: free, stand: sign * cfg.stand, base: rest, freed: false,
+            scaleX: sign * flip * sc, scaleY: sc, texW: tex.width, texH: tex.height, anchorY: cfg.anchorY,
+            boltFx: (cfg.boltFx === undefined ? 0.5 : cfg.boltFx), boltFy: cfg.handFrac,
+            tense: cfg.tense, loose: cfg.loose, phase: Object.keys(T.parts).length * 1.7
+          };
+        }
+
+        // z-order: limbs (behind) → torso → head → bolts (top).
+        // Arms/legs sit behind the torso so the chest's shoulder/hip sockets
+        // cover the ball joints — the junction merges instead of overlapping.
+        addLimb("legL", art.leg, R.leg, { x: -hpX, y: hpY }, 1);
+        addLimb("legR", art.leg, R.leg, { x: hpX, y: hpY }, -1);
+        addLimb("armL", art.arm, R.arm, { x: -shX, y: shY }, 1);
+        addLimb("armR", art.arm, R.arm, { x: shX, y: shY }, -1);
+
+        var torso = new PIXI.Sprite(art.chest);
+        torso.anchor.set(0.5, 0.5); torso.scale.set(S); torso.position.set(0, 0);
+        root.addChild(torso);
+        T.torsoSprite = torso;
+
+        T.headTex = art.heads;
+        var head = new PIXI.Sprite(art.heads[T.faceByFreed[0]]);
+        head.anchor.set(0.5, R.headNeck); head.scale.set(S); head.position.set(0, R.headY * torsoH);
+        root.addChild(head); T.headSprite = head;
+
+        T.boltDefs.forEach(function (def) {
+          var p = T.parts[def.limb];
+          var b = new PIXI.Sprite(nuts[def.color]);
+          b.anchor.set(0.5);
+          b.scale.set(T.boltSize / b.texture.width);
+          var bp = boltLocalPos(p);
+          b.position.set(bp.x, bp.y);
+          root.addChild(b);
+          T.bolts.push({ id: def.id, gfx: b, limb: def.limb, color: def.color, popped: false });
+        });
+
+        app.ticker.add(updateTinMan);
+
+        if (window.location.search.indexOf("qa") >= 0) {
+          window.__qaTinman = TINMAN;
+          window.__qaLedgeY = function () {
+            return frameSprite ? (frameSprite.y + TINMAN.rig.ledgeTexY * frameSprite.scale.y) : null;
+          };
+          // current boot-bottom in design space
+          window.__qaFootY = function () { return TINMAN.root.y + TINMAN.footBottomLocal; };
+        }
+      }
+
+      function setFace(freedCount) {
+        var T = TINMAN;
+        if (!T.headSprite) return;
+        var idx = T.faceByFreed[Math.min(freedCount, T.faceByFreed.length - 1)];
+        T.headSprite.texture = T.headTex[idx];
+      }
+
+      function updateTinMan() {
+        var T = TINMAN;
+        var dt = app.ticker.deltaMS / 1000;
+        T.time += dt;
+        var t = T.time;
+
+        var freedom = T.freedCount / T.total;   // 0 = fully bolted, 1 = free
+        var trapped = 1 - freedom;               // 1 = fully bolted, 0 = free
+
+        if (T.falling) {
+          // gravity drop onto the frame's lower edge, with a damped bounce
+          T.fallV += 2600 * dt;
+          T.root.y += T.fallV * dt;
+          T.root.x += (T.cx - T.root.x) * 0.25;
+          T.root.rotation += (0 - T.root.rotation) * 0.25;
+          T.root.scale.y = 1;
+          if (T.root.y >= T.standRootY) {
+            T.root.y = T.standRootY;
+            if (Math.abs(T.fallV) > 130) T.fallV = -T.fallV * 0.36; // bounce
+            else { T.falling = false; T.fallV = 0; T.baseY = T.standRootY; }
+          }
+        } else if (T.standing) {
+          // Standing like a person: feet planted, body fixed. No bob/sway/rotation
+          // that would slide or float the feet — life comes only from the chest
+          // breathing, arms, and head (things that move while standing still).
+          T.root.x = T.cx;
+          T.root.y = T.baseY;
+          T.root.rotation = 0;
+          T.root.scale.y = 1;
+          if (T.torsoSprite) T.torsoSprite.scale.y = T.scale * (1 + Math.sin(t * 1.9) * 0.012);
+        } else {
+          // bolted/partial: breathing grows with freedom, faint strain when pinned
+          T.root.x = T.cx + trapped * 2.0 * Math.sin(t * 18.0);
+          T.root.y = T.baseY + (1.0 + 4.0 * freedom) * Math.sin(t * 1.8);
+          T.root.rotation = trapped * 0.010 * Math.sin(t * 15.0 + 1.3);
+          T.root.scale.y = 1 + (0.004 + 0.012 * freedom) * Math.sin(t * 1.8);
+        }
+
+        if (T.headSprite) {
+          T.headSprite.rotation = T.standing
+            ? Math.sin(t * 2.0) * 0.05
+            : (0.045 * freedom * Math.sin(t * 1.4) + trapped * 0.018 * Math.sin(t * 16.0));
+        }
+
+        ["armL", "armR", "legL", "legR"].forEach(function (name) {
+          var p = T.parts[name];
+          if (p.freed) {
+            // freed: ease toward standing pose (if standing) or relaxed swing
+            var target = T.standing ? p.stand : p.free;
+            p.base += (target - p.base) * 0.10;
+            // standing: arms sway gently, LEGS LOCKED RIGID (feet planted); else loose swing
+            var amp = T.standing ? (name.charAt(0) === "a" ? 0.05 : 0) : p.loose;
+            p.sp.rotation = p.base + Math.sin(t * 2.1 + p.phase) * amp;
+          } else {
+            // bolted: hand pinned to the frame → rigid, only a hair of strain
+            p.sp.rotation = p.rest + trapped * 0.006 * Math.sin(t * 20.0 + p.phase);
+          }
+        });
+
+        // Bolts stay fixed on the pinned hands/feet (use rest angle, no jiggle)
+        T.bolts.forEach(function (b) {
+          if (b.popped) return;
+          var bp = boltLocalPos(T.parts[b.limb]);
+          b.gfx.position.set(bp.x, bp.y);
+        });
+      }
+
+      // Map a limb's bolt-anchor (texture fraction fx,fy) → root-local design
+      // position, through its scale/flip and fixed rest angle.
+      function boltLocalPos(p) {
+        var dx = (p.boltFx - 0.5) * p.texW * p.scaleX;
+        var dy = (p.boltFy - p.anchorY) * p.texH * p.scaleY;
+        var c = Math.cos(p.rest), s = Math.sin(p.rest);
+        return { x: p.joint.x + dx * c - dy * s, y: p.joint.y + dx * s + dy * c };
+      }
+
+      // Public, trigger-agnostic API: pop the next bolt (later: call on match)
+      function releaseNextBolt() {
+        var T = TINMAN;
+        for (var i = 0; i < T.bolts.length; i++) {
+          if (!T.bolts[i].popped) { popBolt(T.bolts[i]); return true; }
+        }
+        return false;
+      }
+
+      function popBolt(b) {
+        b.popped = true;                    // freezes the bolt in place
+        TINMAN.freedCount++;
+        setFace(TINMAN.freedCount);         // his face brightens as it frees
+
+        // A lightning bolt arcs up from the board and zaps this nut loose.
+        zapBolt(b, function () {
+          TINMAN.parts[b.limb].freed = true; // limb releases on impact
+          vanishBolt(b.gfx);                 // nut flashes white and vanishes
+          if (TINMAN.freedCount >= TINMAN.total) onTinManFree();
+        });
+      }
+
+      // Crackling electric arc from the board up to the bolt
+      function zapBolt(b, onHit) {
+        WOZAudio.play("bolt", 0.9);
+        var T = TINMAN;
+        var topY = (boardState.center[0] && boardState.center[0][0]) ? boardState.center[0][0].y : 950;
+        var start = { x: layout.board.x, y: topY };
+        var end = { x: T.root.x + b.gfx.x, y: T.root.y + b.gfx.y };
+        var arc = new PIXI.Graphics();
+        uiLayer.addChild(arc);
+        var t = 0, hit = false;
+        function step() {
+          t += app.ticker.deltaMS;
+          drawBoltArc(arc, start, end, t);
+          if (!hit && t >= 150) { hit = true; spark(end); if (onHit) onHit(); }
+          if (t >= 360) { app.ticker.remove(step); if (arc.parent) arc.parent.removeChild(arc); }
+        }
+        app.ticker.add(step);
+      }
+
+      function drawBoltArc(g, a, b, t) {
+        g.clear();
+        var p = Math.min(1, t / 150);                 // arc shoots up to the bolt
+        var tx = a.x + (b.x - a.x) * p, ty = a.y + (b.y - a.y) * p;
+        var dx = tx - a.x, dy = ty - a.y, len = Math.sqrt(dx * dx + dy * dy) || 1;
+        var nx = -dy / len, ny = dx / len;            // perpendicular for jitter
+        var segs = 12, pts = [];
+        for (var i = 0; i <= segs; i++) {
+          var f = i / segs;
+          var amp = (i === 0 || i === segs) ? 0 : (Math.random() - 0.5) * 34;
+          pts.push([a.x + dx * f + nx * amp, a.y + dy * f + ny * amp]);
+        }
+        var fade = t > 210 ? Math.max(0, 1 - (t - 210) / 150) : 1;
+        function stroke(w, col, al) {
+          g.lineStyle(w, col, al * fade);
+          g.moveTo(pts[0][0], pts[0][1]);
+          for (var k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1]);
+        }
+        stroke(16, 0x2a86ff, 0.22);  // outer glow
+        stroke(8, 0x8fd0ff, 0.55);   // mid
+        stroke(3.5, 0xffffff, 0.95); // bright core
+      }
+
+      function spark(pos) {
+        var fl = new PIXI.Graphics();
+        fl.beginFill(0x8fd0ff, 0.5); fl.drawCircle(0, 0, 60); fl.endFill();
+        fl.beginFill(0xffffff, 0.95); fl.drawCircle(0, 0, 34); fl.endFill();
+        fl.position.set(pos.x, pos.y);
+        uiLayer.addChild(fl);
+        var t = 0;
+        app.ticker.add(function st() {
+          t += app.ticker.deltaMS;
+          var k = Math.min(1, t / 220);
+          fl.scale.set(0.5 + k); fl.alpha = 1 - k;
+          if (k >= 1) { app.ticker.remove(st); if (fl.parent) fl.parent.removeChild(fl); }
+        });
+      }
+
+      function vanishBolt(g) {
+        var t = 0, bs = g.scale.x;
+        g.tint = 0xffffff; // electrocuted flash
+        app.ticker.add(function st() {
+          t += app.ticker.deltaMS;
+          var k = Math.min(1, t / 200);
+          g.scale.set(bs * (1 + 0.7 * k));
+          g.alpha = 1 - k;
+          if (k >= 1) { app.ticker.remove(st); g.visible = false; }
+        });
+      }
+
+      function onTinManFree() {
+        // Gravity: drop him so his feet land on the frame's lower edge, then
+        // settle into a happy standing idle. (Install end screen comes later.)
+        var T = TINMAN;
+        // Ledge in design space, derived from the actual frame sprite (robust to
+        // frame size/position). Land the BOOT BOTTOM on it so he can't sink below.
+        var floorY = frameSprite ? (frameSprite.y + T.rig.ledgeTexY * frameSprite.scale.y) : 812;
+        T.standRootY = floorY - T.footBottomLocal;
+        T.falling = true;
+        T.fallV = 0;
+        T.standing = true; // limbs ease to the standing pose
+        WOZAudio.play("free", 0.9);
+        if (window.location.search.indexOf("qa") >= 0) window.__tinManFreed = true;
+
+        // After he drops and settles into standing, show the win card
+        setTimeout(showEndScreen, 2200);
+      }
+
+      // ---- Win / end screen (rescue-continuation) ----
+      function updateConfetti() {
+        var dt = app.ticker.deltaMS / 1000;
+        for (var i = 0; i < confetti.length; i++) {
+          var c = confetti[i];
+          c.x += c.vx * dt;
+          c.y += c.vy * dt;
+          c.vy += 240 * dt;
+          c.rotation += c.vr * dt;
+          if (c.y > DESIGN_H + 30) { // recycle to keep a gentle celebration
+            c.y = -30; c.x = Math.random() * DESIGN_W; c.vy = 120 + Math.random() * 160;
+          }
+        }
+      }
+
+      function goldStyle(size) {
+        return new PIXI.TextStyle({
+          fontFamily: "Georgia, 'Times New Roman', serif", fontSize: size, fontWeight: "bold",
+          fill: ["#fff3b0", "#ffcc33", "#e6850e"], fillGradientType: 0,
+          stroke: "#5c2e00", strokeThickness: size * 0.11,
+          dropShadow: true, dropShadowColor: "#000000", dropShadowBlur: 6, dropShadowDistance: 3, align: "center"
+        });
+      }
+      function easeOutBack(x) {
+        var c1 = 1.70158, c3 = c1 + 1;
+        return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+      }
+
+      // Candy-Crush-style win takeover: dim everything, rays + glowing hero,
+      // "SAVED!", logo, big Play Now.
+      function showEndScreen() {
+        if (endShown) return;
+        endShown = true;
+        if (bottomLogo) bottomLogo.visible = false;
+        if (bottomCta) bottomCta.visible = false;
+        if (titleText) titleText.visible = false;
+        hideHint();
+        WOZAudio.play("win", 1.0);
+
+        var heroCx = DESIGN_W / 2, heroCy = 770;
+
+        // full-screen dim
+        var veil = new PIXI.Graphics();
+        veil.beginFill(0x140820, 0.86);
+        veil.drawRect(0, 0, DESIGN_W, DESIGN_H);
+        veil.endFill();
+        veil.alpha = 0;
+        veil.eventMode = "static";
+        veil.on("pointertap", openStore);
+        uiLayer.addChild(veil);
+
+        // radial light rays behind the hero (slow rotate)
+        var rays = new PIXI.Graphics();
+        var N = 18, RR = 620;
+        for (var s = 0; s < N; s++) {
+          var a0 = (s / N) * Math.PI * 2, a1 = a0 + (Math.PI * 2 / N) * 0.5;
+          rays.beginFill(0xffd24d, 0.16);
+          rays.moveTo(0, 0);
+          rays.lineTo(Math.cos(a0) * RR, Math.sin(a0) * RR);
+          rays.lineTo(Math.cos(a1) * RR, Math.sin(a1) * RR);
+          rays.closePath();
+          rays.endFill();
+        }
+        rays.position.set(heroCx, heroCy);
+        rays.alpha = 0;
+        uiLayer.addChild(rays);
+
+        // hero (celebrating Tin Man, glow baked in)
+        var hero = new PIXI.Sprite(endTextures.hero);
+        hero.anchor.set(0.5);
+        var hbase = 600 / hero.texture.width;
+        hero.scale.set(hbase);
+        hero.position.set(heroCx, heroCy);
+        hero.alpha = 0;
+        uiLayer.addChild(hero);
+
+        // logo top
+        var logo = new PIXI.Sprite(endTextures.logo);
+        logo.anchor.set(0.5);
+        logo.scale.set(430 / logo.texture.width);
+        logo.position.set(DESIGN_W / 2, 235);
+        logo.alpha = 0;
+        uiLayer.addChild(logo);
+
+        // SAVED! word
+        var word = new PIXI.Text("SAVED!", goldStyle(110));
+        word.anchor.set(0.5);
+        word.position.set(DESIGN_W / 2, 1255);
+        word.alpha = 0;
+        uiLayer.addChild(word);
+
+        // big Play Now CTA
+        var cta = new PIXI.Sprite(endTextures.play);
+        cta.anchor.set(0.5);
+        var cbase = 486 / cta.texture.width;
+        cta.scale.set(cbase);
+        cta.position.set(DESIGN_W / 2, 1460);
+        cta.eventMode = "static";
+        cta.cursor = "pointer";
+        cta.on("pointertap", openStore);
+        cta.alpha = 0;
+        uiLayer.addChild(cta);
+
+        // light confetti
+        var palette = [0xEF1205, 0x0BA2FD, 0xFDD703, 0xB46CE0, 0x46c84f];
+        for (var k = 0; k < 40; k++) {
+          var pc = new PIXI.Graphics();
+          pc.beginFill(palette[k % palette.length]);
+          pc.drawRoundedRect(-9, -6, 18, 12, 3);
+          pc.endFill();
+          pc.position.set(Math.random() * DESIGN_W, -30 - Math.random() * 500);
+          pc.vx = (Math.random() - 0.5) * 70;
+          pc.vy = 130 + Math.random() * 170;
+          pc.vr = (Math.random() - 0.5) * 9;
+          uiLayer.addChild(pc);
+          confetti.push(pc);
+        }
+        app.ticker.add(updateConfetti);
+
+        // entrance + idle animation
+        var t = 0;
+        app.ticker.add(function () {
+          t += app.ticker.deltaMS;
+          var k2 = Math.min(1, t / 350);
+          veil.alpha = 0.86 * k2;
+          rays.alpha = 0.9 * k2;
+          logo.alpha = k2; word.alpha = k2; cta.alpha = k2;
+          rays.rotation += app.ticker.deltaMS / 1000 * 0.22;
+          // hero: pop-in with overshoot, then gentle victory bob
+          var hk = Math.min(1, t / 460);
+          var pop = easeOutBack(hk);
+          var bob = t > 460 ? Math.sin((t - 460) / 1000 * 2.2) * 0.018 : 0;
+          hero.alpha = Math.min(1, t / 250);
+          hero.scale.set(hbase * (pop + bob));
+          // CTA pulse
+          var cp = t > 460 ? (1 + 0.05 * Math.sin((t - 460) / 1000 * 3.2)) : k2;
+          cta.scale.set(cbase * cp);
+        });
+      }
+
+      function createBackground(texture) {
+        bgSprite = new PIXI.Sprite(texture);
+        bgLayer.addChild(bgSprite);
+      }
+
+      function createLogo(texture) {
+        var sp = new PIXI.Sprite(texture);
+        sp.anchor.set(0.5);
+        sp.scale.set(layout.logo.width / texture.width);
+        sp.position.set(layout.logo.cx, layout.logo.cy);
+        uiLayer.addChild(sp);
+        bottomLogo = sp;
+        if (window.location.search.indexOf("qa") >= 0) window.__qaLogo = sp;
+      }
+
+      function openStore() {
+        try { if (window.mraid && mraid.open) mraid.open(CTA_URL); } catch (e) {}
+      }
+
+      function createCta(texture) {
+        var sp = new PIXI.Sprite(texture);
+        sp.anchor.set(0.5);
+        var base = layout.cta.width / texture.width;
+        sp.scale.set(base);
+        sp.position.set(layout.cta.cx, layout.cta.cy);
+        sp.eventMode = "static";
+        sp.cursor = "pointer";
+        sp.on("pointertap", openStore);
+        uiLayer.addChild(sp);
+        bottomCta = sp;
+        if (window.location.search.indexOf("qa") >= 0) window.__qaCta = sp;
+        // gentle attention pulse
+        var t = 0;
+        app.ticker.add(function () {
+          t += app.ticker.deltaMS / 1000;
+          sp.scale.set(base * (1 + 0.045 * Math.sin(t * 3.2)));
+        });
+      }
+
+      function createTitle() {
+        var style = new PIXI.TextStyle({
+          fontFamily: "Georgia, 'Times New Roman', serif",
+          fontSize: 52,
+          fontWeight: "bold",
+          fill: ["#ffe566", "#ffb800", "#e68a00"],
+          fillGradientType: 0,
+          stroke: "#5c2e00",
+          strokeThickness: 6,
+          dropShadow: true,
+          dropShadowColor: "#000000",
+          dropShadowBlur: 4,
+          dropShadowDistance: 3,
+          align: "center",
+          wordWrap: true,
+          wordWrapWidth: DESIGN_W - 80
+        });
+
+        titleText = new PIXI.Text("Save the Tin Man!", style);
+        titleText.anchor.set(0.5);
+        uiLayer.addChild(titleText);
+      }
+
+      function layoutScene() {
+        var vw = app.screen.width;
+        var vh = app.screen.height;
+
+        // Scale design canvas to cover viewport (AppLovin-style)
+        var scale = Math.max(vw / DESIGN_W, vh / DESIGN_H);
+        var offsetX = (vw - DESIGN_W * scale) / 2;
+        var offsetY = (vh - DESIGN_H * scale) / 2;
+
+        // Uniform design-space transform: every layer shares the same
+        // scale/offset, so children are positioned in 941×1672 coordinates.
+        allLayers.forEach(function (layer) {
+          layer.scale.set(scale);
+          layer.position.set(offsetX, offsetY);
+        });
+
+        if (bgSprite) {
+          bgSprite.width = DESIGN_W;
+          bgSprite.height = DESIGN_H;
+        }
+
+        if (titleText) {
+          titleText.position.set(layout.title.x, layout.title.y);
+        }
+
+        // Stage must cover the viewport to receive pointermove anywhere
+        stage.hitArea = app.screen;
+      }
+
+      function onResize() {
+        layoutScene();
+      }
+
+      function start() {
+        // Audio: init + load, unlock on first user gesture (autoplay is blocked)
+        WOZAudio.init();
+        WOZAudio.loadAll(AUDIO_URLS);
+        function unlockOnce() {
+          WOZAudio.unlock();
+          document.removeEventListener("pointerdown", unlockOnce);
+          document.removeEventListener("touchstart", unlockOnce);
+        }
+        document.addEventListener("pointerdown", unlockOnce);
+        document.addEventListener("touchstart", unlockOnce);
+
+        // Stage-level pointer handling drives swipe detection
+        stage.eventMode = "static";
+        stage.hitArea = app.screen;
+        stage.on("pointermove", onPointerMove);
+        stage.on("pointerup", onPointerUp);
+        stage.on("pointerupoutside", onPointerUp);
+
+        loadAssets(function (assets) {
+          createBackground(assets.background);
+          createFrame(assets.frame);
+          createTinMan(assets.tinman, assets.nuts);
+          createBoard(assets.board, assets.icons);
+          createHand(assets.hand);
+          createLogo(assets.logo);
+          createCta(assets.play);
+          endTextures = { logo: assets.logo, play: assets.play, hero: assets.hero };
+          createTitle();
+          layoutScene();
+
+          // QA hook for testing the release flow without match detection
+          if (window.location.search.indexOf("qa") >= 0) window.__releaseBolt = releaseNextBolt;
+        });
+
+        window.addEventListener("resize", onResize);
+      }
+
+      if (mraid.getState() === "loading") {
+        mraid.addEventListener("ready", start);
+      } else {
+        start();
+      }
+    })();
+  </script>
+</body>
+</html>
