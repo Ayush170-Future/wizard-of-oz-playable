@@ -2759,14 +2759,18 @@ void main(void)\r
         WOZAudio.loadAll(AUDIO_URLS);
         if (window.location.search.indexOf("qa") >= 0) window.__qaAudio = WOZAudio;
         // Unlock on the first real gesture. iOS can need a couple of taps before
-        // the context reports "running", so keep the listeners until it does
-        // (capture phase, so PIXI's own pointer handling can't swallow them).
+        // the context reports "running" (capture phase, so PIXI's own pointer
+        // handling can't swallow them). These stay attached for the whole session:
+        // iOS RE-SUSPENDS the context between interactions, and resume() only works
+        // inside a user-activation event. A swipe commits on pointermove (NOT an
+        // activation event), so the only place we can legally re-resume before the
+        // swap SFX fires is the swipe's own pointerdown/touchstart — hence we must
+        // keep listening. Removing them after the first unlock is exactly what made
+        // the first post-resuspend swipe silent.
         var unlockEvents = ["pointerdown", "touchstart", "touchend", "mousedown", "click"];
         function unlockOnce() {
+          if (WOZAudio.ctx && WOZAudio.ctx.state === "running") return; // already live — cheap no-op
           WOZAudio.unlock();
-          if (WOZAudio.ctx && WOZAudio.ctx.state === "running") {
-            unlockEvents.forEach(function (ev) { document.removeEventListener(ev, unlockOnce, true); });
-          }
         }
         unlockEvents.forEach(function (ev) { document.addEventListener(ev, unlockOnce, true); });
 
