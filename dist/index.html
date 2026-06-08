@@ -1410,6 +1410,7 @@ void main(void)\r
       var startBlur = null;     // blur filter applied to the scene on the start screen
       var startDim = null;      // dark wash over the blurred start-screen scene
       var frameSprite = null;
+      var boardTraySprite = null;
       var titleText = null;
       var SPARKLE_TEX = null;   // per-gem-type star-burst textures (set on load)
 
@@ -1554,6 +1555,7 @@ void main(void)\r
         tray.height = trayH;
         tray.position.set(b.x, b.y);
         boardLayer.addChild(tray);
+        boardTraySprite = tray;
 
         // Map tray-texture pixels → design space (tray is drawn at trayW×trayH,
         // centered at b.x,b.y). texture native is texture.width × texture.height.
@@ -2450,7 +2452,29 @@ void main(void)\r
         hideHint();
         WOZAudio.play("win", 1.0);
 
-        var heroCx = DESIGN_W / 2, heroCy = 770;
+        // In landscape the endLayer uses vw/DESIGN_W scale at position (0,0),
+        // so the visible design height = vh * DESIGN_W / vw. Map all elements
+        // into that viewport so the end screen fills the full screen.
+        var vw = app.screen.width, vh = app.screen.height;
+        var isWide = (vw / vh) >= WIDE_ASPECT;
+        // Landscape: side-by-side — logo left, hero right, SAVED!+CTA along bottom.
+        // All coords are in endLayer design space (0..DESIGN_W × 0..dVH).
+        var heroCx = DESIGN_W / 2, heroCy, logoX, logoY, wordY, ctaY, logoW, heroW;
+        var dVH = isWide ? Math.round(vh * DESIGN_W / vw) : DESIGN_H;
+        if (isWide) {
+          heroCx = Math.round(DESIGN_W * 0.68);        // right two-thirds
+          heroCy = Math.round(dVH * 0.36);             // shifted up — room for SAVED!+CTA below
+          logoX  = Math.round(DESIGN_W * 0.27);        // left one-third
+          logoY  = Math.round(dVH * 0.36);             // vertically aligned with hero
+          wordY  = Math.round(dVH * 0.74);             // below hero
+          ctaY   = Math.round(dVH * 0.89);
+          logoW  = Math.round(DESIGN_W * 0.28);
+          heroW  = Math.round(dVH * 0.50);             // bigger hero
+        } else {
+          heroCx = DESIGN_W / 2; logoX = DESIGN_W / 2;
+          heroCy = 770; logoY = 235; wordY = 1255; ctaY = 1460;
+          logoW  = 430; heroW = 600;
+        }
 
         // full-screen dim (oversized so it covers beyond the fit-scaled design
         // rect — i.e. the notch / home-indicator bands too)
@@ -2475,40 +2499,41 @@ void main(void)\r
           rays.closePath();
           rays.endFill();
         }
+        // Rays centred on the hero position
         rays.position.set(heroCx, heroCy);
         rays.alpha = 0;
         endLayer.addChild(rays);
 
-        // hero (celebrating Tin Man, glow baked in)
+        // Hero — celebrating Tin Man
         var hero = new PIXI.Sprite(endTextures.hero);
         hero.anchor.set(0.5);
-        var hbase = 600 / hero.texture.width;
+        var hbase = heroW / hero.texture.width;
         hero.scale.set(hbase);
         hero.position.set(heroCx, heroCy);
         hero.alpha = 0;
         endLayer.addChild(hero);
 
-        // logo top
+        // Logo — left side in landscape, top-centre in portrait
         var logo = new PIXI.Sprite(endTextures.logo);
         logo.anchor.set(0.5);
-        logo.scale.set(430 / logo.texture.width);
-        logo.position.set(DESIGN_W / 2, 235);
+        logo.scale.set(logoW / logo.texture.width);
+        logo.position.set(logoX, logoY);
         logo.alpha = 0;
         endLayer.addChild(logo);
 
-        // SAVED! word
-        var word = new PIXI.Text("SAVED!", goldStyle(110));
+        // "SAVED!" — smaller, stacked directly below the Tin Man hero
+        var word = new PIXI.Text("SAVED!", goldStyle(isWide ? 46 : 110));
         word.anchor.set(0.5);
-        word.position.set(DESIGN_W / 2, 1255);
+        word.position.set(isWide ? heroCx : DESIGN_W / 2, wordY);
         word.alpha = 0;
         endLayer.addChild(word);
 
-        // big Play Now CTA
+        // Play Now — same visual as the in-game main CTA (layout.cta.width = 344)
         var cta = new PIXI.Sprite(endTextures.play);
         cta.anchor.set(0.5);
-        var cbase = 486 / cta.texture.width;
+        var cbase = (isWide ? 344 : 486) / cta.texture.width;
         cta.scale.set(cbase);
-        cta.position.set(DESIGN_W / 2, 1460);
+        cta.position.set(isWide ? heroCx : DESIGN_W / 2, ctaY);
         cta.eventMode = "static";
         cta.cursor = "pointer";
         cta.on("pointertap", openStore);
@@ -2715,6 +2740,7 @@ void main(void)\r
         WOZAudio.unlock();   // resume context + start BGM up front (context is now warm)
 
         boardLayer.visible = true;
+        boardLayer.filters = null;   // remove start-screen blur
         if (titleText) titleText.visible = true;
         if (bottomCta) bottomCta.visible = true;
 
@@ -2784,16 +2810,9 @@ void main(void)\r
           offsetX = (vw - DESIGN_W * scale) / 2;
           offsetY = padTop + (safeH - DESIGN_H * scale) / 2;
         } else {
-          // Wide / tablet: game anchors to the RIGHT, branding column on the
-          // left. Scale = fit the safe height, but cap the game to ~58% of the
-          // width so it isn't oversized/cramped and the left column gets real
-          // room (logo + title + Play Now read at a good size).
-          var rightMargin = Math.max(sa.right, vw * 0.045);
-          var fitH = (safeH * 0.94) / DESIGN_H;     // ~94% of safe height
-          var capW = (vw * 0.58) / DESIGN_W;
-          scale = Math.min(fitH, capW);
-          offsetX = vw - rightMargin - DESIGN_W * scale;
-          offsetY = padTop + (safeH - DESIGN_H * scale) / 2;
+          // Landscape: hand off to the split layout (Tin Man left, board right).
+          layoutSceneLandscape(vw, vh, sa, padTop, padBottom, safeH);
+          return;
         }
 
         contentLayers.forEach(function (layer) {
@@ -2801,16 +2820,135 @@ void main(void)\r
           layer.position.set(offsetX, offsetY);
         });
 
-        // Win takeover: design space fit to the safe band and centred on the FULL
-        // screen (so it's centred even when the game is anchored right in wide mode).
         var endScale = Math.min(coverScale, safeH / DESIGN_H);
         endLayer.scale.set(endScale);
         endLayer.position.set((vw - DESIGN_W * endScale) / 2, padTop + (safeH - DESIGN_H * endScale) / 2);
 
-        layoutBranding(wide, vw, vh, scale, offsetX, offsetY, sa, padTop, padBottom);
+        layoutBranding(false, vw, vh, scale, offsetX, offsetY, sa, padTop, padBottom);
 
-        // Stage must cover the viewport to receive pointermove anywhere
         stage.hitArea = app.screen;
+      }
+
+      // Landscape split: Tin Man on the left half, match-3 board on the right half.
+      function layoutSceneLandscape(vw, vh, sa, padTop, padBottom, safeH) {
+        var halfW = Math.floor(vw / 2);
+        var inset = Math.max(10, vw * 0.015);
+
+        // ── Left: Tin Man, 65% of safe height, vertically centred ─────────────
+        var FRAME_W = layout.frame.width;
+        var FRAME_H = frameSprite ? frameSprite.height : FRAME_W;
+        var FRAME_CX = DESIGN_W / 2;
+        var FRAME_CY = layout.frame.topY + FRAME_H / 2;
+        var tmAvailW = (halfW - sa.left) * 0.90;
+        var tmAvailH = safeH * 0.72;
+        var tmScale  = Math.min(tmAvailW / FRAME_W, tmAvailH / FRAME_H);
+        var tmCX     = sa.left + (halfW - sa.left) / 2;
+        var tmOffX   = tmCX - FRAME_CX * tmScale;
+        var tmOffY   = vh / 2 - FRAME_CY * tmScale;
+
+        [frameLayer, tinManLayer, uiLayer].forEach(function (l) {
+          l.scale.set(tmScale);
+          l.position.set(tmOffX, tmOffY);
+        });
+
+        // ── Right: board, 70% of safe height, shifted up to leave CTA room ────
+        var BOARD_W  = layout.board.width;
+        var BOARD_H  = boardTraySprite ? boardTraySprite.height : BOARD_W;
+        var BOARD_CX = layout.board.x;
+        var BOARD_CY = layout.board.y;
+        // Mirror the Tin Man's sizing and vertical centering exactly.
+        var bdAvailW = (halfW - sa.right) * 0.90;
+        var bdAvailH = safeH * 0.72;
+        var bdScale  = Math.min(bdAvailW / BOARD_W, bdAvailH / BOARD_H);
+        var bdCX     = halfW + (halfW - sa.right) / 2;
+        var bdOffX   = bdCX - BOARD_CX * bdScale;
+        var bdOffY   = vh / 2 - BOARD_CY * bdScale;
+
+        [boardLayer, tutorialLayer].forEach(function (l) {
+          l.scale.set(bdScale);
+          l.position.set(bdOffX, bdOffY);
+        });
+
+        // Start screen: show the board blurred behind TAP TO START so the right
+        // half isn't empty. Blur is removed in beginGame() when play starts.
+        if (!gameLive) {
+          boardLayer.visible = true;
+          if (!boardLayer.__startBlur) {
+            boardLayer.__startBlur = new PIXI.BlurFilter(12);
+            boardLayer.__startBlur.quality = 4;
+          }
+          boardLayer.filters = [boardLayer.__startBlur];
+        } else {
+          boardLayer.filters = null;
+        }
+
+        // End screen: scale to fill full viewport width so it feels truly fullscreen.
+        // Content in showEndScreen() is placed at landscape-aware design coords.
+        var endCoverScale = vw / DESIGN_W;
+        endLayer.scale.set(endCoverScale);
+        endLayer.position.set(0, 0);
+
+        stage.hitArea = app.screen;
+        layoutBrandingLandscape(vw, vh, safeH, tmScale, tmOffX, tmOffY, halfW, sa, padTop, padBottom);
+      }
+
+      // Landscape branding layout.
+      // uiLayer shares the Tin Man transform — toDX/toDY converts any screen
+      // position to the uiLayer design-space so sprites land exactly where we want.
+      function layoutBrandingLandscape(vw, vh, safeH, tmScale, tmOffX, tmOffY, halfW, sa, padTop, padBottom) {
+        function toDX(sx) { return (sx - tmOffX) / tmScale; }
+        function toDY(sy) { return (sy - tmOffY) / tmScale; }
+
+        var inset    = Math.max(10, vw * 0.02);
+        var leftEdge = sa.left + inset;
+        var colW     = Math.max(40, halfW - sa.left - inset * 2);
+
+        // ── Title: one line, centred across full screen width, top zone ─────────
+        var titleCY   = padTop + safeH * 0.07;
+        var titleMaxH = safeH * 0.10;
+        if (titleText) {
+          titleText.resolution = 4;
+          titleText.style.wordWrapWidth = 9999;
+          titleText.scale.set(1);
+          var tnW = titleText.width || 300, tnH = titleText.height || 120;
+          var tFit = Math.min((vw * 0.34) / tnW, titleMaxH / tnH);
+          titleText.scale.set(tFit / tmScale);
+          titleText.position.set(toDX(vw / 2), toDY(titleCY));
+        }
+
+        // ── Logo: leftmost bottom — anchored to left edge, always before any return ──
+        var botMaxH = safeH * 0.17;
+        var botCY   = padTop + safeH * 0.89;
+        if (bottomLogo) {
+          var logoMaxW = halfW * 0.38;
+          var logoFit  = Math.min(logoMaxW / bottomLogo.texture.width, botMaxH / bottomLogo.texture.height);
+          var logoHalfW = bottomLogo.texture.width * logoFit / 2;
+          bottomLogo.baseScale = logoFit / tmScale;
+          bottomLogo.scale.set(bottomLogo.baseScale);
+          bottomLogo.position.set(toDX(sa.left + inset + logoHalfW), toDY(botCY));
+        }
+
+        var rightHalfCX = halfW + (halfW - sa.right) / 2;   // centre of right half
+        var rightHalfW  = (halfW - sa.right) * 0.88;
+
+        if (!gameLive && startPrompt) {
+          // ── Start screen: TAP TO START centred in the right half ─────────────
+          var pdW = startPrompt.dW || PLAQUE_W, pdH = startPrompt.dH || PLAQUE_H;
+          var promptFit = Math.min((rightHalfW * 0.72) / pdW, (safeH * 0.30) / pdH);
+          startPrompt.baseScale = promptFit / tmScale;
+          startPrompt.scale.set(startPrompt.baseScale);
+          startPrompt.position.set(toDX(rightHalfCX), toDY(vh / 2));
+          return;
+        }
+
+        // ── Gameplay: Play Now centred below the board (right half) ───────────
+        if (bottomCta) {
+          var ctaMaxW = rightHalfW * 0.75;
+          var ctaFit  = Math.min(ctaMaxW / bottomCta.texture.width, (safeH * 0.14) / bottomCta.texture.height);
+          bottomCta.baseScale = ctaFit / tmScale;
+          bottomCta.scale.set(bottomCta.baseScale);
+          bottomCta.position.set(toDX(rightHalfCX), toDY(padTop + safeH * 0.94));
+        }
       }
 
       // Position title / logo / Play-Now. Portrait = their normal spots inside
