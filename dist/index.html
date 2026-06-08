@@ -2842,8 +2842,14 @@ void main(void)\r
         var tmAvailW = (halfW - sa.left) * 0.90;
         var tmAvailH = safeH * 0.72;
         var tmScale  = Math.min(tmAvailW / FRAME_W, tmAvailH / FRAME_H);
-        var tmCX     = sa.left + (halfW - sa.left) / 2;
-        var tmOffX   = tmCX - FRAME_CX * tmScale;
+        // Inner-align: push Tin Man's RIGHT edge close to the centre divider
+        // so the gap between the two elements stays tight on any screen size.
+        var innerGap   = Math.max(6, vw * 0.012);
+        var tmActualW  = FRAME_W * tmScale;
+        var tmCX_scr   = halfW - innerGap - tmActualW / 2;
+        // Don't let the left edge clip off-screen
+        tmCX_scr = Math.max(sa.left + 8 + tmActualW / 2, tmCX_scr);
+        var tmOffX   = tmCX_scr - FRAME_CX * tmScale;
         var tmOffY   = vh / 2 - FRAME_CY * tmScale;
 
         [frameLayer, tinManLayer, uiLayer].forEach(function (l) {
@@ -2851,17 +2857,20 @@ void main(void)\r
           l.position.set(tmOffX, tmOffY);
         });
 
-        // ── Right: board, 70% of safe height, shifted up to leave CTA room ────
+        // ── Right: board, mirrored sizing + inner-aligned toward centre ────────
         var BOARD_W  = layout.board.width;
         var BOARD_H  = boardTraySprite ? boardTraySprite.height : BOARD_W;
         var BOARD_CX = layout.board.x;
         var BOARD_CY = layout.board.y;
-        // Mirror the Tin Man's sizing and vertical centering exactly.
         var bdAvailW = (halfW - sa.right) * 0.90;
         var bdAvailH = safeH * 0.72;
         var bdScale  = Math.min(bdAvailW / BOARD_W, bdAvailH / BOARD_H);
-        var bdCX     = halfW + (halfW - sa.right) / 2;
-        var bdOffX   = bdCX - BOARD_CX * bdScale;
+        // Inner-align: push board's LEFT edge close to the centre divider
+        var bdActualW  = BOARD_W * bdScale;
+        var bdCX_scr   = halfW + innerGap + bdActualW / 2;
+        // Don't let the right edge clip off-screen
+        bdCX_scr = Math.min(vw - sa.right - 8 - bdActualW / 2, bdCX_scr);
+        var bdOffX   = bdCX_scr - BOARD_CX * bdScale;
         var bdOffY   = vh / 2 - BOARD_CY * bdScale;
 
         [boardLayer, tutorialLayer].forEach(function (l) {
@@ -2889,13 +2898,13 @@ void main(void)\r
         endLayer.position.set(0, 0);
 
         stage.hitArea = app.screen;
-        layoutBrandingLandscape(vw, vh, safeH, tmScale, tmOffX, tmOffY, halfW, sa, padTop, padBottom);
+        layoutBrandingLandscape(vw, vh, safeH, tmScale, tmOffX, tmOffY, halfW, sa, padTop, padBottom, bdCX_scr);
       }
 
       // Landscape branding layout.
       // uiLayer shares the Tin Man transform — toDX/toDY converts any screen
       // position to the uiLayer design-space so sprites land exactly where we want.
-      function layoutBrandingLandscape(vw, vh, safeH, tmScale, tmOffX, tmOffY, halfW, sa, padTop, padBottom) {
+      function layoutBrandingLandscape(vw, vh, safeH, tmScale, tmOffX, tmOffY, halfW, sa, padTop, padBottom, bdCX_scr) {
         function toDX(sx) { return (sx - tmOffX) / tmScale; }
         function toDY(sy) { return (sy - tmOffY) / tmScale; }
 
@@ -2904,14 +2913,17 @@ void main(void)\r
         var colW     = Math.max(40, halfW - sa.left - inset * 2);
 
         // ── Title: one line, centred across full screen width, top zone ─────────
-        var titleCY   = padTop + safeH * 0.07;
-        var titleMaxH = safeH * 0.10;
+        // Title height budget scales with safeH so it looks proportional on
+        // both phone landscape (short) and iPad landscape (tall).
+        var titleMaxH = Math.max(18, safeH * 0.10);
+        var titleCY   = padTop + safeH * 0.055;
         if (titleText) {
           titleText.resolution = 4;
           titleText.style.wordWrapWidth = 9999;
           titleText.scale.set(1);
           var tnW = titleText.width || 300, tnH = titleText.height || 120;
-          var tFit = Math.min((vw * 0.34) / tnW, titleMaxH / tnH);
+          // Width cap also scales with vw so text never feels oversized on wide screens
+          var tFit = Math.min((vw * 0.32) / tnW, titleMaxH / tnH);
           titleText.scale.set(tFit / tmScale);
           titleText.position.set(toDX(vw / 2), toDY(titleCY));
         }
@@ -2928,26 +2940,27 @@ void main(void)\r
           bottomLogo.position.set(toDX(sa.left + inset + logoHalfW), toDY(botCY));
         }
 
-        var rightHalfCX = halfW + (halfW - sa.right) / 2;   // centre of right half
-        var rightHalfW  = (halfW - sa.right) * 0.88;
+        // Board centre (inner-aligned) — used for both TAP TO START and Play Now
+        var boardCX    = bdCX_scr || (halfW + (halfW - sa.right) / 2);
+        var rightHalfW = (halfW - sa.right) * 0.88;
 
         if (!gameLive && startPrompt) {
-          // ── Start screen: TAP TO START centred in the right half ─────────────
+          // ── Start screen: TAP TO START centred on the match-3 board ──────────
           var pdW = startPrompt.dW || PLAQUE_W, pdH = startPrompt.dH || PLAQUE_H;
           var promptFit = Math.min((rightHalfW * 0.72) / pdW, (safeH * 0.30) / pdH);
           startPrompt.baseScale = promptFit / tmScale;
           startPrompt.scale.set(startPrompt.baseScale);
-          startPrompt.position.set(toDX(rightHalfCX), toDY(vh / 2));
+          startPrompt.position.set(toDX(boardCX), toDY(vh / 2));
           return;
         }
 
-        // ── Gameplay: Play Now centred below the board (right half) ───────────
+        // ── Gameplay: Play Now below the board, aligned to board centre ───────
         if (bottomCta) {
           var ctaMaxW = rightHalfW * 0.75;
           var ctaFit  = Math.min(ctaMaxW / bottomCta.texture.width, (safeH * 0.14) / bottomCta.texture.height);
           bottomCta.baseScale = ctaFit / tmScale;
           bottomCta.scale.set(bottomCta.baseScale);
-          bottomCta.position.set(toDX(rightHalfCX), toDY(padTop + safeH * 0.94));
+          bottomCta.position.set(toDX(boardCX), toDY(padTop + safeH * 0.94));
         }
       }
 
