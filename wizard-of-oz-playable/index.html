@@ -278,35 +278,9 @@
       }
       var CTA_URL = isIOS() ? IOS_CTA_URL : ANDROID_CTA_URL;
 
-      var app = new PIXI.Application({
-        resizeTo: window,
-        backgroundColor: 0x1a0a2e,
-        antialias: true,
-        resolution: Math.min(window.devicePixelRatio || 1, 2),
-        autoDensity: true
-      });
-      document.getElementById("game").appendChild(app.view);
-
-      var stage = app.stage;
-
-      // Layer containers (bottom → top)
-      // bg → frame (wooden board) → tinMan (bolted ON the frame, full body)
-      // → board (match-3) → tutorial → ui
-      var bgLayer = new PIXI.Container();
-      var frameLayer = new PIXI.Container();
-      var tinManLayer = new PIXI.Container();
-      var boardLayer = new PIXI.Container();
-      var tutorialLayer = new PIXI.Container();
-      var uiLayer = new PIXI.Container();
-
-      // endLayer (win takeover) sits on top and is ALWAYS centred on the full
-      // screen, independent of the wide-mode right-anchored game column.
-      var endLayer = new PIXI.Container();
-      var allLayers = [bgLayer, frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer, endLayer];
-      stage.addChild.apply(stage, allLayers);
-      // The background fills the whole screen (under notch/home indicator);
-      // everything else (frame, board, title, CTA) is fit into the safe area.
-      var contentLayers = [frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer];
+      // Declared here; assigned inside start() after MRAID ready so layout/sizing
+      // decisions comply with the MRAID v2.0 requirement.
+      var app, stage, bgLayer, frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer, endLayer, allLayers, contentLayers;
 
       // Read iOS safe-area insets (notch / Dynamic Island / home indicator).
       // Needs viewport-fit=cover on the <meta viewport>; 0 on devices without.
@@ -1870,6 +1844,32 @@
       }
 
       function start() {
+        // Create renderer after MRAID ready — layout/sizing must not happen before.
+        app = new PIXI.Application({
+          resizeTo: window,
+          backgroundColor: 0x1a0a2e,
+          antialias: true,
+          resolution: Math.min(window.devicePixelRatio || 1, 2),
+          autoDensity: true
+        });
+        document.getElementById("game").appendChild(app.view);
+        // Fix #2: show a fallback message if the WebGL context is lost.
+        app.view.addEventListener("webglcontextlost", function (e) {
+          e.preventDefault();
+          showError("Rendering context lost. Please reload the ad.", "webglcontextlost");
+        });
+        stage = app.stage;
+        bgLayer = new PIXI.Container();
+        frameLayer = new PIXI.Container();
+        tinManLayer = new PIXI.Container();
+        boardLayer = new PIXI.Container();
+        tutorialLayer = new PIXI.Container();
+        uiLayer = new PIXI.Container();
+        endLayer = new PIXI.Container();
+        allLayers = [bgLayer, frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer, endLayer];
+        stage.addChild.apply(stage, allLayers);
+        contentLayers = [frameLayer, tinManLayer, boardLayer, tutorialLayer, uiLayer];
+
         // Audio: init + load, unlock on first user gesture (autoplay is blocked)
         WOZAudio.init();
         WOZAudio.loadAll(AUDIO_URLS);
@@ -1889,6 +1889,14 @@
           WOZAudio.unlock();
         }
         unlockEvents.forEach(function (ev) { document.addEventListener(ev, unlockOnce, true); });
+
+        // Fix #1: mute audio when the ad is hidden or not viewable.
+        document.addEventListener("visibilitychange", function () {
+          WOZAudio.setMuted(document.hidden);
+        });
+        mraid.addEventListener("viewableChange", function (viewable) {
+          WOZAudio.setMuted(!viewable);
+        });
 
         // On-device audio diagnostics: load ...index.html?debug on the phone to
         // see a live readout (context state, decoded count, last error) pinned
